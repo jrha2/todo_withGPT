@@ -3,3 +3,5 @@ dist
 .env
 .DS_Store
 Thumbs.db
+apps/desktop/electron-v43.2.0-win32-x64.zip
+apps/desktop/node_modules
