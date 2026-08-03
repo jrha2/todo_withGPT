@@ -111,6 +111,29 @@ function MainLayout() {
     })
   }
 
+  const handleAddComment = (parentId: string | null, content: string) => {
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          comments: [
+            ...currentTask.comments,
+            {
+              id: `comment-${Date.now()}`,
+              parentId,
+              author: 'JH',
+              createdAt: new Date().toLocaleString('sv-SE').replace('T', ' '),
+              content,
+            },
+          ],
+        },
+      }
+    })
+  }
+
   const selectedTaskDetail = taskDetails[selectedTaskId]
 
   return (
@@ -144,6 +167,7 @@ function MainLayout() {
           memo={selectedTaskDetail.memo}
           comments={selectedTaskDetail.comments}
           onSaveMemo={handleSaveMemo}
+          onAddComment={handleAddComment}
         />
       </main>
     </div>

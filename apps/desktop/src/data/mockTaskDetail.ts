@@ -83,12 +83,21 @@ export const mockTaskDetailsById = {
     comments: [
       {
         id: 'comment-1',
+        parentId: null,
         author: 'JH',
         createdAt: '2026-08-01 09:20',
         content: '조선소 쪽 회신 받으면 바로 일정 반영하겠습니다.',
       },
       {
         id: 'comment-2',
+        parentId: 'comment-1',
+        author: 'PS',
+        createdAt: '2026-08-01 10:10',
+        content: '회신 받으면 참석자 안내 일정도 맞추겠습니다.',
+      },
+      {
+        id: 'comment-3',
+        parentId: null,
         author: 'PS',
         createdAt: '2026-08-01 11:05',
         content: '참석자 명단은 오늘 오후에 업데이트하겠습니다.',
@@ -136,13 +145,22 @@ export const mockTaskDetailsById = {
       '참석자 확정 이후 이동 계획과 숙박 여부를 함께 정리해야 함. VIP 참석 여부는 별도 확인 필요.',
     comments: [
       {
-        id: 'comment-3',
+        id: 'comment-4',
+        parentId: null,
         author: 'PS',
         createdAt: '2026-08-02 10:00',
         content: '초청 대상자 1차 목록을 정리했습니다.',
       },
       {
-        id: 'comment-4',
+        id: 'comment-5',
+        parentId: 'comment-4',
+        author: 'JH',
+        createdAt: '2026-08-02 10:30',
+        content: 'VIP 대상자는 별도 시트로 분리 부탁드립니다.',
+      },
+      {
+        id: 'comment-6',
+        parentId: null,
         author: 'JH',
         createdAt: '2026-08-02 13:40',
         content: 'VIP 대상자는 별도 시트로 분리해 주세요.',

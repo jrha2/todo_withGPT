@@ -261,8 +261,7 @@
 }
 
 .communication-card {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
 }
 
 .section-header h2 {
@@ -450,6 +449,60 @@
   font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
 }
 
+.comment-reply-editor-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-left: 42px;
+}
+
+.comment-reply-editor-arrow {
+  width: 18px;
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 15px;
+  line-height: 1.2;
+  padding-top: 10px;
+}
+
+.comment-reply-editor-box {
+  flex: 1;
+  border: 1px solid #d7dce8;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.comment-reply-editor {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid #d7dce8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  box-sizing: border-box;
+  font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+  resize: vertical;
+}
+
+.comment-reply-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.comment-reply-editor-actions button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #cfd6e3;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .add-subtask-form {
   display: flex;
   flex-direction: column;
@@ -565,4 +618,14 @@
   box-sizing: border-box;
   resize: vertical;
   font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+}
+
+.comment-root-editor-wrap {
+  margin-top: 12px;
+  margin-left: 12px;
+}
+
+.memo-root-actions {
+  margin-top: 10px;
+  margin-left: 12px;
 }
