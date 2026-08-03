@@ -1,34 +1,113 @@
-function MemoSection() {
+import { useEffect, useState } from 'react'
+
+type Reply = {
+  id: string
+  author: string
+  createdAt: string
+  content: string
+}
+
+type Comment = {
+  id: string
+  author: string
+  createdAt: string
+  content: string
+  replies?: Reply[]
+}
+
+type MemoSectionProps = {
+  memo: string
+  comments: Comment[]
+  onSaveMemo: (nextMemo: string) => void
+}
+
+function MemoSection({ memo, comments, onSaveMemo }: MemoSectionProps) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [draftMemo, setDraftMemo] = useState(memo)
+
+  useEffect(() => {
+    setDraftMemo(memo)
+    setIsEditing(false)
+  }, [memo])
+
   return (
     <section className="content-card communication-card">
-      <div className="section-header">
+      <div className="section-header section-header-row">
         <h2>메모</h2>
+        {!isEditing ? (
+          <button type="button" onClick={() => setIsEditing(true)}>
+            작성/수정
+          </button>
+        ) : (
+          <div className="memo-edit-actions">
+            <button
+              type="button"
+              onClick={() => {
+                onSaveMemo(draftMemo)
+                setIsEditing(false)
+              }}
+            >
+              저장
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraftMemo(memo)
+                setIsEditing(false)
+              }}
+            >
+              취소
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="memo-box compact">
-        조선소 일정 확인 후 내부 행사 일정과 맞추기. 대모 참석 여부와 이동 일정도 함께
-        정리 필요.
-      </div>
+      {!isEditing ? (
+        <div className="memo-box compact">{memo}</div>
+      ) : (
+        <textarea
+          className="memo-editor"
+          value={draftMemo}
+          onChange={(event) => setDraftMemo(event.target.value)}
+        />
+      )}
 
       <div className="inline-comments">
-        <div className="comment-item compact">
-          <div className="comment-author">JH · 2026-08-01 09:20</div>
-          <div className="comment-body">
-            조선소 쪽 회신 받으면 바로 일정 반영하겠습니다.
-          </div>
-        </div>
+        {comments.map((comment) => (
+          <div className="comment-thread" key={comment.id}>
+            <div className="comment-row">
+              <div className="comment-arrow">↳</div>
 
-        <div className="comment-item compact">
-          <div className="comment-author">PS · 2026-08-01 11:05</div>
-          <div className="comment-body">
-            참석자 명단은 오늘 오후에 업데이트하겠습니다.
-          </div>
-        </div>
-      </div>
+              <div className="comment-item compact">
+                <div className="comment-author">
+                  {comment.author} · {comment.createdAt}
+                </div>
+                <div className="comment-body">{comment.content}</div>
 
-      <div className="comment-input-row compact">
-        <textarea placeholder="메모에 대한 답글 입력..." />
-        <button type="button">등록</button>
+                <div className="comment-actions">
+                  <button type="button">답글</button>
+                </div>
+              </div>
+            </div>
+
+            {comment.replies && comment.replies.length > 0 && (
+              <div className="comment-replies">
+                {comment.replies.map((reply) => (
+                  <div className="comment-reply-row" key={reply.id}>
+                    <div className="comment-reply-arrow">↳</div>
+
+                    <div className="comment-reply-item">
+                      <div className="comment-reply-author">
+                        {reply.author} · {reply.createdAt}
+                      </div>
+                      <div className="comment-reply-body">{reply.content}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </section>
   )

@@ -1,15 +1,30 @@
-function TaskHeader() {
+type Attachment = {
+  id: string
+  name: string
+}
+
+type TaskDetail = {
+  path: string
+  title: string
+  description: string
+  dueDate: string
+  alarm: string
+  assignee: string
+  attachments: Attachment[]
+}
+
+type TaskHeaderProps = {
+  taskDetail: TaskDetail
+}
+
+function TaskHeader({ taskDetail }: TaskHeaderProps) {
   return (
     <header className="detail-header">
       <div className="detail-header-top">
         <div>
-          <p className="detail-path">
-            명명식 준비 &gt; 2026 &gt; 일본 &gt; Oshima &gt; 명명식 준비 체크리스트
-          </p>
-          <h1 className="detail-title">명명식 준비 체크리스트</h1>
-          <p className="detail-description">
-            명명식 준비를 위한 전체 작업 및 진행상황 관리
-          </p>
+          <p className="detail-path">{taskDetail.path}</p>
+          <h1 className="detail-title">{taskDetail.title}</h1>
+          <p className="detail-description">{taskDetail.description}</p>
         </div>
 
         <div className="detail-header-actions">
@@ -22,15 +37,15 @@ function TaskHeader() {
         <div className="detail-meta">
           <div className="meta-item">
             <span className="meta-label">기한</span>
-            <span className="meta-value">2026-08-10</span>
+            <span className="meta-value">{taskDetail.dueDate}</span>
           </div>
           <div className="meta-item">
             <span className="meta-label">알람</span>
-            <span className="meta-value">2026-08-09 09:00</span>
+            <span className="meta-value">{taskDetail.alarm}</span>
           </div>
           <div className="meta-item">
             <span className="meta-label">담당자</span>
-            <span className="meta-value assignee-chip">JH Jae-Ryong Ha</span>
+            <span className="meta-value assignee-chip">{taskDetail.assignee}</span>
           </div>
         </div>
 
@@ -40,14 +55,12 @@ function TaskHeader() {
             <button type="button">첨부 추가</button>
           </div>
           <div className="attachment-summary-files">
-            <div className="attachment-summary-item">
-              <span>naming-ceremony-plan.xlsx</span>
-              <button type="button">열기</button>
-            </div>
-            <div className="attachment-summary-item">
-              <span>participants_draft.docx</span>
-              <button type="button">열기</button>
-            </div>
+            {taskDetail.attachments.map((attachment) => (
+              <div className="attachment-summary-item" key={attachment.id}>
+                <span>{attachment.name}</span>
+                <button type="button">열기</button>
+              </div>
+            ))}
           </div>
         </div>
       </div>

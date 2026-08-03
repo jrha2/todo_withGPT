@@ -1,6 +1,6 @@
 .app-shell {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 300px 14px 1fr;
   height: 100vh;
   background: #f3f4f8;
   overflow: hidden;
@@ -14,6 +14,26 @@
   flex-direction: column;
   gap: 13px;
   overflow: auto;
+}
+
+.navigation-resize-handle {
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.navigation-resize-handle:hover {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.navigation-resize-grip {
+  width: 4px;
+  height: 64px;
+  border-radius: 999px;
+  background: #cbd5e1;
 }
 
 .navigation-header {
@@ -62,6 +82,11 @@
   padding: 0 12px;
   font-size: 14px;
   color: #1f2937;
+  border: none;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
 }
 
 .tree-node.folder {
@@ -137,7 +162,6 @@
 
 .detail-header-actions button,
 .add-subtask-row button,
-.comment-input-row button,
 .attachment-summary-actions button,
 .attachment-summary-item button {
   border: 1px solid #cfd6e3;
@@ -291,12 +315,15 @@
 
 .memo-box {
   border: 1px solid #e5e7eb;
-  border-radius: 10px 10px 0 0;
+  border-radius: 10px;
   padding: 11px 13px;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: #374151;
   background: #fafbfc;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
 }
 
 .memo-box.compact {
@@ -306,55 +333,236 @@
 .inline-comments {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  margin-top: 0;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.comment-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.comment-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-left: 12px;
+}
+
+.comment-arrow {
+  width: 18px;
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1.2;
+  padding-top: 10px;
 }
 
 .comment-item {
-  border-left: 1px solid #e5e7eb;
-  border-right: 1px solid #e5e7eb;
-  border-bottom: 1px solid #e5e7eb;
-  border-top: none;
-  border-radius: 0;
-  padding: 9px 13px;
-  background: #fcfcfd;
+  flex: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #ffffff;
 }
 
 .comment-item.compact {
-  padding: 9px 13px;
+  padding: 10px 12px;
 }
 
 .comment-author {
   font-size: 12px;
   font-weight: 700;
   color: #374151;
-  margin-bottom: 3px;
+  margin-bottom: 4px;
 }
 
 .comment-body {
   font-size: 13px;
   color: #374151;
-  line-height: 1.45;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
 }
 
-.comment-input-row {
+.comment-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.comment-actions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d7dce8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.comment-replies {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 0;
+  gap: 8px;
+  margin-left: 42px;
 }
 
-.comment-input-row.compact textarea {
-  min-height: 58px;
+.comment-reply-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 
-.comment-input-row textarea {
-  width: 100%;
-  resize: none;
-  border: 1px solid #d7dce8;
-  border-top: none;
-  border-radius: 0 0 10px 10px;
-  padding: 11px 13px;
+.comment-reply-arrow {
+  width: 18px;
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 15px;
+  line-height: 1.2;
+  padding-top: 9px;
+}
+
+.comment-reply-item {
+  flex: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: #fafbfc;
+}
+
+.comment-reply-author {
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
+  margin-bottom: 3px;
+}
+
+.comment-reply-body {
   font-size: 13px;
+  color: #374151;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+}
+
+.add-subtask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.add-subtask-form input {
+  height: 36px;
+  border: 1px solid #d7dce8;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 13px;
+  background: #ffffff;
+}
+
+.add-subtask-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.subtask-delete-button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #f1c7c7;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #b42318;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.confirm-modal {
+  width: 360px;
+  background: #ffffff;
+  border: 1px solid #d9dde7;
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.confirm-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 10px;
+}
+
+.confirm-modal-body {
+  font-size: 13px;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.confirm-modal-actions button {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid #cfd6e3;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-header-row button,
+.memo-edit-actions button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #cfd6e3;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.memo-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.memo-editor {
+  width: 100%;
+  min-height: 92px;
+  border: 1px solid #d7dce8;
+  border-radius: 10px;
+  padding: 11px 13px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #374151;
+  background: #ffffff;
   box-sizing: border-box;
+  resize: vertical;
+  font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
 }
