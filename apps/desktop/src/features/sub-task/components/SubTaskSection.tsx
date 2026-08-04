@@ -13,6 +13,11 @@ type SubTaskSectionProps = {
   onToggleSubTask: (subTaskId: string) => void
   onAddSubTask: (title: string) => void
   onDeleteSubTask: (subTaskId: string) => void
+  onUpdateSubTask: (
+    subTaskId: string,
+    field: 'dueDate' | 'assignee',
+    value: string,
+  ) => void
 }
 
 function SubTaskSection({
@@ -20,10 +25,16 @@ function SubTaskSection({
   onToggleSubTask,
   onAddSubTask,
   onDeleteSubTask,
+  onUpdateSubTask,
 }: SubTaskSectionProps) {
   const [isAdding, setIsAdding] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [editingField, setEditingField] = useState<{
+    subTaskId: string
+    field: 'dueDate' | 'assignee'
+  } | null>(null)
+  const [editingValue, setEditingValue] = useState('')
 
   const handleSubmit = () => {
     const trimmedTitle = newTitle.trim()
@@ -39,6 +50,36 @@ function SubTaskSection({
 
   const deleteTarget = subTasks.find((subTask) => subTask.id === deleteTargetId) ?? null
 
+  const startEditing = (
+    subTaskId: string,
+    field: 'dueDate' | 'assignee',
+    currentValue: string,
+  ) => {
+    setEditingField({ subTaskId, field })
+    setEditingValue(currentValue)
+  }
+
+  const saveEditing = () => {
+    if (!editingField) {
+      return
+    }
+
+    const trimmed = editingValue.trim()
+
+    if (!trimmed) {
+      return
+    }
+
+    onUpdateSubTask(editingField.subTaskId, editingField.field, trimmed)
+    setEditingField(null)
+    setEditingValue('')
+  }
+
+  const cancelEditing = () => {
+    setEditingField(null)
+    setEditingValue('')
+  }
+
   return (
     <section className="content-card subtask-card">
       <div className="section-header">
@@ -46,32 +87,105 @@ function SubTaskSection({
       </div>
 
       <div className="subtask-list">
-        {subTasks.map((subTask) => (
-          <div
-            className={`subtask-item ${subTask.completed ? 'is-completed' : ''}`}
-            key={subTask.id}
-          >
-            <label className="subtask-left">
-              <input
-                type="checkbox"
-                checked={subTask.completed}
-                onChange={() => onToggleSubTask(subTask.id)}
-              />
-              <span>{subTask.title}</span>
-            </label>
-            <div className="subtask-right">
-              <span>{subTask.dueDate}</span>
-              <span>{subTask.assignee}</span>
-              <button
-                className="subtask-delete-button"
-                type="button"
-                onClick={() => setDeleteTargetId(subTask.id)}
-              >
-                삭제
-              </button>
+        {subTasks.map((subTask) => {
+          const isEditingDueDate =
+            editingField?.subTaskId === subTask.id && editingField.field === 'dueDate'
+          const isEditingAssignee =
+            editingField?.subTaskId === subTask.id && editingField.field === 'assignee'
+
+          return (
+            <div
+              className={`subtask-item ${subTask.completed ? 'is-completed' : ''}`}
+              key={subTask.id}
+            >
+              <label className="subtask-left">
+                <input
+                  type="checkbox"
+                  checked={subTask.completed}
+                  onChange={() => onToggleSubTask(subTask.id)}
+                />
+                <span>{subTask.title}</span>
+              </label>
+
+              <div className="subtask-right">
+                <div className="subtask-edit-block">
+                  {!isEditingDueDate ? (
+                    <button
+                      className="subtask-chip-button due-date-chip"
+                      type="button"
+                      onClick={() =>
+                        startEditing(subTask.id, 'dueDate', subTask.dueDate)
+                      }
+                    >
+                      <span className="chip-label">기한</span>
+                      <span className="chip-value">{subTask.dueDate}</span>
+                    </button>
+                  ) : (
+                    <div className="subtask-pop-editor">
+                      <div className="subtask-pop-editor-title">기한 수정</div>
+                      <input
+                        className="subtask-pop-input"
+                        type="date"
+                        value={editingValue}
+                        onChange={(event) => setEditingValue(event.target.value)}
+                      />
+                      <div className="subtask-pop-actions">
+                        <button type="button" onClick={saveEditing}>
+                          저장
+                        </button>
+                        <button type="button" onClick={cancelEditing}>
+                          취소
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="subtask-edit-block">
+                  {!isEditingAssignee ? (
+                    <button
+                      className="subtask-chip-button assignee-chip-button"
+                      type="button"
+                      onClick={() =>
+                        startEditing(subTask.id, 'assignee', subTask.assignee)
+                      }
+                    >
+                      <span className="chip-label">담당자</span>
+                      <span className="chip-value">{subTask.assignee}</span>
+                    </button>
+                  ) : (
+                    <div className="subtask-pop-editor">
+                      <div className="subtask-pop-editor-title">담당자 수정</div>
+                      <input
+                        className="subtask-pop-input"
+                        type="text"
+                        value={editingValue}
+                        onChange={(event) => setEditingValue(event.target.value)}
+                        placeholder="담당자 입력"
+                      />
+                      <div className="subtask-pop-actions">
+                        <button type="button" onClick={saveEditing}>
+                          저장
+                        </button>
+                        <button type="button" onClick={cancelEditing}>
+                          취소
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  className="subtask-delete-button"
+                  type="button"
+                  onClick={() => setDeleteTargetId(subTask.id)}
+                >
+                  삭제
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="add-subtask-row">

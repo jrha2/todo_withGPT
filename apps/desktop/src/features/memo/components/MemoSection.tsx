@@ -6,6 +6,7 @@ type CommentItem = {
   author: string
   createdAt: string
   content: string
+  deleted?: boolean
 }
 
 type MemoSectionProps = {
@@ -13,6 +14,8 @@ type MemoSectionProps = {
   comments: CommentItem[]
   onSaveMemo: (nextMemo: string) => void
   onAddComment: (parentId: string | null, content: string) => void
+  onEditComment: (commentId: string, nextContent: string) => void
+  onDeleteComment: (commentId: string) => void
 }
 
 type CommentNode = CommentItem & {
@@ -24,6 +27,8 @@ function MemoSection({
   comments,
   onSaveMemo,
   onAddComment,
+  onEditComment,
+  onDeleteComment,
 }: MemoSectionProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [draftMemo, setDraftMemo] = useState(memo)
@@ -31,6 +36,9 @@ function MemoSection({
   const [replyDraft, setReplyDraft] = useState('')
   const [isRootReplyOpen, setIsRootReplyOpen] = useState(false)
   const [newCommentDraft, setNewCommentDraft] = useState('')
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
+  const [editingCommentDraft, setEditingCommentDraft] = useState('')
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
 
   useEffect(() => {
     setDraftMemo(memo)
@@ -39,6 +47,9 @@ function MemoSection({
     setReplyDraft('')
     setIsRootReplyOpen(false)
     setNewCommentDraft('')
+    setEditingCommentId(null)
+    setEditingCommentDraft('')
+    setDeleteTargetId(null)
   }, [memo])
 
   const commentTree = useMemo(() => {
@@ -69,6 +80,8 @@ function MemoSection({
     return roots
   }, [comments])
 
+  const deleteTarget = comments.find((comment) => comment.id === deleteTargetId) ?? null
+
   const handleReplySubmit = (parentId: string) => {
     const trimmed = replyDraft.trim()
 
@@ -93,7 +106,22 @@ function MemoSection({
     setIsRootReplyOpen(false)
   }
 
+  const handleEditSubmit = (commentId: string) => {
+    const trimmed = editingCommentDraft.trim()
+
+    if (!trimmed) {
+      return
+    }
+
+    onEditComment(commentId, trimmed)
+    setEditingCommentId(null)
+    setEditingCommentDraft('')
+  }
+
   const renderCommentNode = (node: CommentNode, depth = 0) => {
+    const isEditingThisComment = editingCommentId === node.id
+    const isDeleted = !!node.deleted
+
     return (
       <div className="comment-thread" key={node.id}>
         <div
@@ -106,23 +134,67 @@ function MemoSection({
             <div className="comment-author">
               {node.author} · {node.createdAt}
             </div>
-            <div className="comment-body">{node.content}</div>
+
+            {!isEditingThisComment ? (
+              <div className={`comment-body ${isDeleted ? 'comment-body-deleted' : ''}`}>
+                {isDeleted ? '삭제된 댓글입니다' : node.content}
+              </div>
+            ) : (
+              <textarea
+                className="comment-reply-editor"
+                value={editingCommentDraft}
+                onChange={(event) => setEditingCommentDraft(event.target.value)}
+              />
+            )}
 
             <div className="comment-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setReplyTargetId(node.id)
-                  setReplyDraft('')
-                }}
-              >
-                답글
-              </button>
+              {!isDeleted && !isEditingThisComment ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplyTargetId(node.id)
+                      setReplyDraft('')
+                    }}
+                  >
+                    답글
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCommentId(node.id)
+                      setEditingCommentDraft(node.content)
+                    }}
+                  >
+                    수정
+                  </button>
+                  <button type="button" onClick={() => setDeleteTargetId(node.id)}>
+                    삭제
+                  </button>
+                </>
+              ) : null}
+
+              {!isDeleted && isEditingThisComment ? (
+                <>
+                  <button type="button" onClick={() => handleEditSubmit(node.id)}>
+                    저장
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCommentId(null)
+                      setEditingCommentDraft('')
+                    }}
+                  >
+                    취소
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
         </div>
 
-        {replyTargetId === node.id && (
+        {!isDeleted && replyTargetId === node.id && (
           <div
             className="comment-reply-editor-wrap"
             style={{ marginLeft: `${42 + depth * 28}px` }}
@@ -243,6 +315,33 @@ function MemoSection({
       <div className="inline-comments">
         {commentTree.map((node) => renderCommentNode(node))}
       </div>
+
+      {deleteTarget && (
+        <div className="modal-backdrop">
+          <div className="confirm-modal">
+            <div className="confirm-modal-title">댓글 삭제 확인</div>
+            <div className="confirm-modal-body">
+              이 댓글을 삭제하시겠습니까?
+              <br />
+              하위 답글은 유지되고, 본문만 "삭제된 댓글입니다"로 표시됩니다.
+            </div>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteComment(deleteTarget.id)
+                  setDeleteTargetId(null)
+                }}
+              >
+                삭제
+              </button>
+              <button type="button" onClick={() => setDeleteTargetId(null)}>
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

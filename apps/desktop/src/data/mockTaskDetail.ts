@@ -1,38 +1,41 @@
 export const mockNavigationTree = [
   {
     id: 'folder-root-1',
+    parentId: null,
     type: 'folder',
     title: '최상위 폴더',
-    level: 0,
     expanded: true,
+    order: 1,
   },
   {
     id: 'folder-middle-1',
+    parentId: 'folder-root-1',
     type: 'folder',
     title: '중간폴더 1',
-    level: 1,
     expanded: true,
+    order: 1,
   },
   {
     id: 'folder-middle-2',
+    parentId: 'folder-middle-1',
     type: 'folder',
     title: '중간폴더 2',
-    level: 2,
     expanded: true,
+    order: 1,
   },
   {
     id: 'task-1',
+    parentId: 'folder-middle-2',
     type: 'task',
     title: '명명식 준비 체크리스트',
-    level: 3,
-    selected: true,
+    order: 1,
   },
   {
     id: 'task-2',
+    parentId: 'folder-middle-2',
     type: 'task',
     title: '참석자 준비 체크리스트',
-    level: 3,
-    selected: false,
+    order: 2,
   },
 ]
 
@@ -87,6 +90,7 @@ export const mockTaskDetailsById = {
         author: 'JH',
         createdAt: '2026-08-01 09:20',
         content: '조선소 쪽 회신 받으면 바로 일정 반영하겠습니다.',
+        deleted: false,
       },
       {
         id: 'comment-2',
@@ -94,6 +98,7 @@ export const mockTaskDetailsById = {
         author: 'PS',
         createdAt: '2026-08-01 10:10',
         content: '회신 받으면 참석자 안내 일정도 맞추겠습니다.',
+        deleted: false,
       },
       {
         id: 'comment-3',
@@ -101,6 +106,7 @@ export const mockTaskDetailsById = {
         author: 'PS',
         createdAt: '2026-08-01 11:05',
         content: '참석자 명단은 오늘 오후에 업데이트하겠습니다.',
+        deleted: false,
       },
     ],
   },
@@ -150,6 +156,7 @@ export const mockTaskDetailsById = {
         author: 'PS',
         createdAt: '2026-08-02 10:00',
         content: '초청 대상자 1차 목록을 정리했습니다.',
+        deleted: false,
       },
       {
         id: 'comment-5',
@@ -157,6 +164,7 @@ export const mockTaskDetailsById = {
         author: 'JH',
         createdAt: '2026-08-02 10:30',
         content: 'VIP 대상자는 별도 시트로 분리 부탁드립니다.',
+        deleted: false,
       },
       {
         id: 'comment-6',
@@ -164,6 +172,7 @@ export const mockTaskDetailsById = {
         author: 'JH',
         createdAt: '2026-08-02 13:40',
         content: 'VIP 대상자는 별도 시트로 분리해 주세요.',
+        deleted: false,
       },
     ],
   },
