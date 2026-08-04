@@ -5,3 +5,7 @@ dist
 Thumbs.db
 apps/desktop/electron-v43.2.0-win32-x64.zip
 apps/desktop/node_modules
+
+server/database/todo_app.db
+server/database/todo_app.db-shm
+server/database/todo_app.db-wal
