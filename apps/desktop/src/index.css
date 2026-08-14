@@ -1,7 +1,9 @@
 :root {
   font-family: 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif;
-  color: #111827;
-  background: #f3f4f8;
+  font-size: 16px;
+  line-height: 1.45;
+  color: #20222a;
+  background: #f5f6fa;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,5 +22,20 @@ body,
 }
 
 body {
-  background: #f3f4f8;
+  background: #f5f6fa;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(91, 76, 219, 0.16);
+  outline-offset: 1px;
 }

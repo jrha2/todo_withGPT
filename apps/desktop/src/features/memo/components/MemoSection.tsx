@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 type CommentItem = {
   id: string
@@ -11,6 +11,8 @@ type CommentItem = {
 
 type MemoSectionProps = {
   memo: string
+  memoAuthor: string
+  memoUpdatedAt: string
   comments: CommentItem[]
   onSaveMemo: (nextMemo: string) => void
   onAddComment: (parentId: string | null, content: string) => void
@@ -24,6 +26,8 @@ type CommentNode = CommentItem & {
 
 function MemoSection({
   memo,
+  memoAuthor,
+  memoUpdatedAt,
   comments,
   onSaveMemo,
   onAddComment,
@@ -39,18 +43,10 @@ function MemoSection({
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
   const [editingCommentDraft, setEditingCommentDraft] = useState('')
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-
-  useEffect(() => {
-    setDraftMemo(memo)
-    setIsEditing(false)
-    setReplyTargetId(null)
-    setReplyDraft('')
-    setIsRootReplyOpen(false)
-    setNewCommentDraft('')
-    setEditingCommentId(null)
-    setEditingCommentDraft('')
-    setDeleteTargetId(null)
-  }, [memo])
+  const resizeMemoEditor = (element: HTMLTextAreaElement) => {
+    element.style.height = 'auto'
+    element.style.height = `${Math.max(120, element.scrollHeight)}px`
+  }
 
   const commentTree = useMemo(() => {
     const nodeMap = new Map<string, CommentNode>()
@@ -128,11 +124,11 @@ function MemoSection({
           className="comment-row"
           style={{ marginLeft: `${12 + depth * 28}px` }}
         >
-          <div className="comment-arrow">↳</div>
+          <div className="comment-avatar">{node.author.charAt(0).toUpperCase()}</div>
 
           <div className="comment-item compact">
             <div className="comment-author">
-              {node.author} · {node.createdAt}
+              <strong>{node.author}</strong><span>{node.createdAt}</span>
             </div>
 
             {!isEditingThisComment ? (
@@ -237,7 +233,10 @@ function MemoSection({
   return (
     <section className="content-card communication-card">
       <div className="section-header section-header-row">
-        <h2>메모</h2>
+        <div>
+          <div className="section-eyebrow">NOTES & ACTIVITY</div>
+          <h2>메모와 댓글 <span>{comments.length}</span></h2>
+        </div>
         {!isEditing ? (
           <button type="button" onClick={() => setIsEditing(true)}>
             작성/수정
@@ -267,19 +266,38 @@ function MemoSection({
       </div>
 
       {!isEditing ? (
-        <div className="memo-box compact">{memo}</div>
+        <div>
+          {memo && memoAuthor && (
+            <div className="memo-author-line">
+              <span className="memo-author-avatar">
+                {memoAuthor.charAt(0).toUpperCase()}
+              </span>
+              <strong>{memoAuthor}</strong>
+              {memoUpdatedAt && <span>{memoUpdatedAt}</span>}
+            </div>
+          )}
+          <div className={`memo-box compact ${memo ? '' : 'is-empty'}`}>
+            {memo || '이 Task에 필요한 내용이나 아이디어를 기록해 보세요.'}
+          </div>
+        </div>
       ) : (
         <textarea
           className="memo-editor"
+          ref={(element) => {
+            if (element) resizeMemoEditor(element)
+          }}
           value={draftMemo}
-          onChange={(event) => setDraftMemo(event.target.value)}
+          onChange={(event) => {
+            setDraftMemo(event.target.value)
+            resizeMemoEditor(event.currentTarget)
+          }}
         />
       )}
 
       <div className="comment-actions memo-root-actions">
         {!isRootReplyOpen ? (
           <button type="button" onClick={() => setIsRootReplyOpen(true)}>
-            답글
+            + 댓글 남기기
           </button>
         ) : null}
       </div>

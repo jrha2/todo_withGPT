@@ -1,19 +1,67 @@
 {
-  "name": "desktop",
+  "name": "investment-planning-team-workspace",
+  "productName": "투자기획팀 업무관리 공간",
+  "description": "팀 업무와 알림을 관리하는 데스크톱 To Do 앱",
+  "author": "jrha2",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.9.2-beta.0",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"npm:dev:react\" \"npm:dev:electron\"",
+    "dev": "concurrently --kill-others-on-fail \"npm:dev:server\" \"npm:dev:react\" \"npm:dev:electron\"",
+    "dev:client": "concurrently --kill-others-on-fail \"npm:dev:react\" \"npm:dev:electron\"",
+    "dev:server": "node ../../server/index.js",
     "dev:react": "vite",
     "dev:electron": "wait-on tcp:5173 && .\\node_modules\\electron\\dist\\electron.exe .",
     "build": "tsc -b && vite build",
+    "generate:icon": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\generate-icon.ps1",
+    "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\build-windows-installer.ps1",
+    "dist:portable": "npm run generate:icon && npm run build && electron-builder --dir -c.electronDist=. && powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\package-portable.ps1",
     "lint": "eslint .",
+    "test:server": "node ../../server/integration-test.js",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.jrha2.investmentplanningteamworkspace",
+    "productName": "투자기획팀 업무관리 공간",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main.js",
+      "electron/preload.cjs",
+      "electron/server-api.js",
+      "electron/reminder.html",
+      "electron/reminder.css",
+      "electron/reminder.js",
+      "electron/briefing.html",
+      "electron/briefing.css",
+      "electron/briefing.js",
+      "package.json"
+    ],
+    "electronLanguages": [
+      "ko",
+      "en-US"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "artifactName": "투자기획팀 업무관리 공간-설치파일-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "투자기획팀 업무관리 공간"
+    }
   },
   "dependencies": {
     "better-sqlite3": "^13.0.2",
+    "date-holidays": "^3.26.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -26,6 +74,7 @@
     "concurrently": "^10.0.4",
     "cross-env": "^10.1.0",
     "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
