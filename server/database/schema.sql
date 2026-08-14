@@ -2,8 +2,13 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
+  login_id TEXT NULL,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
+  phone TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -31,10 +36,14 @@ CREATE TABLE task_details (
   alarm_at DATETIME NULL,
   assignee_user_id TEXT NULL,
   memo_content TEXT NOT NULL DEFAULT '',
+  memo_author_user_id TEXT NULL,
+  memo_updated_at DATETIME NULL,
+  completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (nav_node_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
-  FOREIGN KEY (assignee_user_id) REFERENCES users(id)
+  FOREIGN KEY (assignee_user_id) REFERENCES users(id),
+  FOREIGN KEY (memo_author_user_id) REFERENCES users(id)
 );
 
 CREATE TABLE sub_tasks (
@@ -91,8 +100,64 @@ CREATE TABLE reminders (
   FOREIGN KEY (task_detail_id) REFERENCES task_details(id) ON DELETE CASCADE
 );
 
+CREATE TABLE reminder_user_states (
+  reminder_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'dismissed')),
+  snoozed_until DATETIME NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (reminder_id, user_id),
+  FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE task_assignees (
+  task_detail_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (task_detail_id, user_id),
+  FOREIGN KEY (task_detail_id) REFERENCES task_details(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE auth_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE sync_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE activity_logs (
+  id TEXT PRIMARY KEY,
+  revision INTEGER NULL,
+  actor_user_id TEXT NULL,
+  actor_name TEXT NOT NULL DEFAULT '팀원',
+  action_type TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NULL,
+  task_id TEXT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE INDEX idx_nav_nodes_parent_order
   ON nav_nodes(parent_id, order_index);
+
+CREATE UNIQUE INDEX idx_users_login_id
+  ON users(login_id COLLATE NOCASE)
+  WHERE login_id IS NOT NULL;
 
 CREATE INDEX idx_nav_nodes_owner_user
   ON nav_nodes(owner_user_id);
@@ -102,6 +167,9 @@ CREATE UNIQUE INDEX idx_task_details_nav_node
 
 CREATE INDEX idx_task_details_assignee
   ON task_details(assignee_user_id);
+
+CREATE INDEX idx_task_assignees_user
+  ON task_assignees(user_id, task_detail_id);
 
 CREATE INDEX idx_sub_tasks_task_order
   ON sub_tasks(task_detail_id, order_index);
@@ -123,3 +191,20 @@ CREATE INDEX idx_reminders_task
 
 CREATE INDEX idx_reminders_remind_status
   ON reminders(remind_at, status);
+
+CREATE INDEX idx_reminder_user_states_user
+  ON reminder_user_states(user_id, status, snoozed_until);
+
+CREATE INDEX idx_auth_sessions_user
+  ON auth_sessions(user_id);
+
+CREATE INDEX idx_auth_sessions_expires
+  ON auth_sessions(expires_at);
+
+CREATE INDEX idx_activity_logs_created
+  ON activity_logs(created_at DESC, id);
+
+CREATE INDEX idx_activity_logs_task
+  ON activity_logs(task_id, created_at DESC);
+
+INSERT INTO sync_state (id, revision) VALUES (1, 0);

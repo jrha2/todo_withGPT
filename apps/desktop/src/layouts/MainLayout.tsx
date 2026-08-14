@@ -1,14 +1,51 @@
 import { useEffect, useRef, useState } from 'react'
-import { mockTaskDetailsById } from '../data/mockTaskDetail'
+import ToDoBriefing from '../features/briefing/components/ToDoBriefing'
 import MemoSection from '../features/memo/components/MemoSection'
 import NavigationBar from '../features/navigation-bar/components/NavigationBar'
 import SubTaskSection from '../features/sub-task/components/SubTaskSection'
 import TaskHeader from '../features/task/components/TaskHeader'
+import type { AuthUser } from '../services/api/authApi'
 import {
+  openAttachment,
+  selectAndCreateAttachment,
+} from '../services/api/attachmentApi'
+import {
+  createComment,
+  deleteComment,
+  getComments,
+  updateComment,
+} from '../services/api/commentApi'
+import { getMemo, saveMemo } from '../services/api/memoApi'
+import {
+  copyNavigationNode,
   createFolder,
   createTask,
+  deleteNavigationNode,
+  dropNavigationNode,
   getNavigationTree,
+  moveNavigationNode,
+  renameNavigationNode,
+  reorderNavigationNode,
+  setNavigationNodeExpanded,
 } from '../services/api/navigationApi'
+import {
+  createSubTask,
+  deleteSubTask,
+  getSubTasks,
+  toggleSubTask,
+  updateSubTask,
+  type SubTaskRecord,
+} from '../services/api/subTaskApi'
+import {
+  getTaskDetail,
+  toggleTaskCompleted,
+  updateTaskDetail,
+  type TaskDetailRecord,
+} from '../services/api/taskApi'
+import {
+  getAssigneeUsers,
+  type AssigneeUser,
+} from '../services/api/userApi'
 
 type NavigationNode = {
   id: string
@@ -17,36 +54,93 @@ type NavigationNode = {
   title: string
   expanded?: boolean
   order: number
+  completed: boolean
 }
 
 type TaskId = string
-type TaskDetail = (typeof mockTaskDetailsById)[keyof typeof mockTaskDetailsById]
-
-declare global {
-  interface Window {
-    __preload_ok?: boolean
-  }
+type TaskDetail = {
+  id: string
+  navNodeId: string
+  path: string
+  title: string
+  description: string
+  dueDate: string
+  alarm: string
+  assignee: string
+  assignees: AssigneeUser[]
+  completed: boolean
+  attachments: Array<{ id: string; name: string }>
+  subTasks: SubTaskRecord[]
+  memo: string
+  memoAuthor: string
+  memoUpdatedAt: string
+  comments: Array<{
+    id: string
+    parentId: string | null
+    author: string
+    createdAt: string
+    content: string
+    deleted?: boolean
+  }>
 }
 
-function MainLayout() {
-  const [navigationWidth, setNavigationWidth] = useState(300)
+const MIN_NAVIGATION_WIDTH = 300
+const MAX_NAVIGATION_WIDTH = 520
+
+function sortSubTasks(items: SubTaskRecord[]) {
+  return [...items].sort((left, right) => {
+    if (!left.dueDate && right.dueDate) return 1
+    if (left.dueDate && !right.dueDate) return -1
+
+    const dueDateOrder = left.dueDate.localeCompare(right.dueDate)
+    if (dueDateOrder !== 0) return dueDateOrder
+
+    const createdAtOrder = left.createdAt.localeCompare(right.createdAt)
+    if (createdAtOrder !== 0) return createdAtOrder
+
+    const creationOrder = left.creationOrder - right.creationOrder
+    return creationOrder !== 0 ? creationOrder : left.id.localeCompare(right.id)
+  })
+}
+
+type MainLayoutProps = {
+  currentUser: AuthUser
+  userRevision: number
+  onOpenAdmin: () => void
+  onLogout: () => void
+}
+
+function MainLayout({
+  currentUser,
+  userRevision,
+  onOpenAdmin,
+  onLogout,
+}: MainLayoutProps) {
+  const [navigationWidth, setNavigationWidth] = useState(MIN_NAVIGATION_WIDTH)
+  const [isNavigationCollapsed, setIsNavigationCollapsed] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState<TaskId>('task-1')
   const [navigationTree, setNavigationTree] = useState<NavigationNode[]>([])
-  const [taskDetails, setTaskDetails] = useState<Record<string, TaskDetail>>(
-    mockTaskDetailsById as Record<string, TaskDetail>,
-  )
+  const [taskDetails, setTaskDetails] = useState<Record<string, TaskDetail>>({})
+  const [assigneeUsers, setAssigneeUsers] = useState<AssigneeUser[]>([])
+  const [activeView, setActiveView] = useState<'task' | 'briefing'>('task')
   const isDraggingRef = useRef(false)
-
-  const preloadOk =
-    typeof window !== 'undefined' ? String(window.__preload_ok) : 'no-window'
-  const apiExists = typeof window !== 'undefined' && !!window.api
-  const navigationApiExists =
-    typeof window !== 'undefined' && !!window.api?.navigation
 
   const loadTree = async () => {
     try {
       const tree = await getNavigationTree()
-      setNavigationTree(tree as NavigationNode[])
+      const navigationNodes = tree as NavigationNode[]
+      setNavigationTree(navigationNodes)
+      setSelectedTaskId((currentTaskId) => {
+        const currentTaskExists = navigationNodes.some(
+          (node) => node.id === currentTaskId && node.type === 'task',
+        )
+
+        if (currentTaskExists) {
+          return currentTaskId
+        }
+
+        return navigationNodes.find((node) => node.type === 'task')?.id ?? ''
+      })
     } catch (error) {
       console.error('Failed to load navigation tree from DB:', error)
     }
@@ -58,7 +152,10 @@ function MainLayout() {
         return
       }
 
-      const nextWidth = Math.min(Math.max(event.clientX, 300), 520)
+      const nextWidth = Math.min(
+        Math.max(event.clientX, MIN_NAVIGATION_WIDTH),
+        MAX_NAVIGATION_WIDTH,
+      )
       setNavigationWidth(nextWidth)
     }
 
@@ -76,8 +173,47 @@ function MainLayout() {
   }, [])
 
   useEffect(() => {
+    return window.api.app.onSelectTask((taskId) => {
+      setSelectedTaskId(taskId)
+      setActiveView('task')
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.api.app.onOpenBriefing(() => {
+      setActiveView('briefing')
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.api.app.onTaskUpdated(({ taskId, completed }) => {
+      setNavigationTree((prev) =>
+        prev.map((node) =>
+          node.id === taskId ? { ...node, completed } : node,
+        ),
+      )
+      setTaskDetails((prev) => {
+        const currentTask = prev[taskId]
+        return currentTask
+          ? { ...prev, [taskId]: { ...currentTask, completed } }
+          : prev
+      })
+    })
+  }, [])
+
+  useEffect(() => {
+    // The initial tree is loaded from the external server after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadTree()
   }, [])
+
+  useEffect(() => {
+    getAssigneeUsers()
+      .then(setAssigneeUsers)
+      .catch((error) => {
+        console.error('Failed to load assignee users from DB:', error)
+      })
+  }, [userRevision])
 
   useEffect(() => {
     const selectedNode = navigationTree.find((node) => node.id === selectedTaskId)
@@ -86,77 +222,225 @@ function MainLayout() {
       return
     }
 
-    setTaskDetails((prev) => {
-      if (prev[selectedTaskId]) {
-        return prev
-      }
+    let cancelled = false
 
-      const parentNode = selectedNode.parentId
-        ? navigationTree.find((node) => node.id === selectedNode.parentId)
-        : null
+    const loadTaskContent = async () => {
+      try {
+        const [taskDetail, subTasks, memo, comments] = await Promise.all([
+          getTaskDetail(selectedTaskId),
+          getSubTasks(selectedTaskId),
+          getMemo(selectedTaskId),
+          getComments(selectedTaskId),
+        ])
 
-      return {
-        ...prev,
-        [selectedTaskId]: {
-          id: `task-detail-${selectedTaskId}`,
-          navNodeId: selectedTaskId,
-          path: parentNode
-            ? `${parentNode.title} > ${selectedNode.title}`
-            : selectedNode.title,
-          title: selectedNode.title,
-          description: '새로 생성된 Task입니다.',
-          dueDate: '2026-08-31',
-          alarm: '2026-08-31 09:00:00',
-          assignee: 'JH Jae-Ryong Ha',
-          attachments: [],
-          subTasks: [],
-          memo: '',
-          comments: [],
-        } as TaskDetail,
+        if (cancelled) {
+          return
+        }
+
+        const parentNode = selectedNode.parentId
+          ? navigationTree.find((node) => node.id === selectedNode.parentId)
+          : null
+        const taskPath = parentNode
+          ? `${parentNode.title} > ${taskDetail.title}`
+          : taskDetail.title
+
+        setTaskDetails((prev) => {
+          return {
+            ...prev,
+            [selectedTaskId]: {
+              id: taskDetail.id,
+              navNodeId: taskDetail.navNodeId,
+              path: taskPath,
+              title: taskDetail.title,
+              description: taskDetail.description,
+              dueDate: taskDetail.dueDate,
+              alarm: taskDetail.alarm,
+              assignee: taskDetail.assignee,
+              assignees: taskDetail.assignees,
+              completed: taskDetail.completed,
+              attachments: taskDetail.attachments,
+              subTasks: sortSubTasks(subTasks),
+              memo: memo.content,
+              memoAuthor: memo.author,
+              memoUpdatedAt: memo.updatedAt,
+              comments,
+            },
+          }
+        })
+      } catch (error) {
+        console.error('Failed to load Task content from DB:', error)
       }
-    })
+    }
+
+    loadTaskContent()
+
+    return () => {
+      cancelled = true
+    }
   }, [selectedTaskId, navigationTree])
 
   const handleResizeMouseDown = () => {
     isDraggingRef.current = true
   }
 
-  const handleToggleFolder = (folderId: string) => {
+  const handleToggleFolder = async (folderId: string) => {
+    const folder = navigationTree.find((node) => node.id === folderId)
+
+    if (!folder || folder.type !== 'folder') {
+      return
+    }
+
+    const expanded = !folder.expanded
+    await setNavigationNodeExpanded(folderId, expanded)
+
     setNavigationTree((prev) =>
       prev.map((node) =>
         node.id === folderId && node.type === 'folder'
-          ? { ...node, expanded: !node.expanded }
+          ? { ...node, expanded }
           : node,
       ),
     )
   }
 
-  const handleRenameNode = (_nodeId: string, _nextTitle: string) => {}
-  const handleCreateChildFolder = (_parentId: string, _title: string) => {}
-  const handleCreateChildTask = (_parentId: string, _title: string) => {}
-  const handleDeleteNode = (_nodeId: string) => {}
-  const handleMoveNode = (_nodeId: string, _targetFolderId: string) => {}
-  const handleCopyNode = (_nodeId: string, _targetFolderId: string) => {}
-  const handleMoveNodeUp = (_nodeId: string) => {}
-  const handleMoveNodeDown = (_nodeId: string) => {}
+  const handleRenameNode = async (nodeId: string, nextTitle: string) => {
+    await renameNavigationNode(nodeId, nextTitle)
+    await loadTree()
+  }
+  const handleCreateChildFolder = async (parentId: string, title: string) => {
+    await handleCreateFolder(title, parentId)
+  }
+  const handleCreateChildTask = async (parentId: string, title: string) => {
+    await handleCreateTask(title, parentId)
+  }
+  const handleDeleteNode = async (nodeId: string) => {
+    const deletingIds = new Set<string>()
+    const pendingIds = [nodeId]
 
-  const buildDefaultTaskDetail = (taskId: string, title: string, parentId: string | null) => {
+    while (pendingIds.length > 0) {
+      const currentId = pendingIds.shift()
+
+      if (!currentId || deletingIds.has(currentId)) {
+        continue
+      }
+
+      deletingIds.add(currentId)
+      navigationTree
+        .filter((node) => node.parentId === currentId)
+        .forEach((node) => pendingIds.push(node.id))
+    }
+
+    await deleteNavigationNode(nodeId)
+
+    const remainingTasks = navigationTree.filter(
+      (node) => node.type === 'task' && !deletingIds.has(node.id),
+    )
+
+    setNavigationTree((prev) =>
+      prev.filter((node) => !deletingIds.has(node.id)),
+    )
+    setTaskDetails((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([taskId]) => !deletingIds.has(taskId)),
+      ) as Record<string, TaskDetail>,
+    )
+
+    if (deletingIds.has(selectedTaskId)) {
+      setSelectedTaskId(remainingTasks[0]?.id ?? '')
+    }
+
+    await loadTree()
+  }
+  const handleMoveNode = async (nodeId: string, targetFolderId: string | null) => {
+    await moveNavigationNode(nodeId, targetFolderId)
+    await loadTree()
+  }
+  const handleCopyNode = async (
+    nodeId: string,
+    targetFolderId: string | null,
+  ) => {
+    const result = (await copyNavigationNode(nodeId, targetFolderId)) as {
+      id: string
+      type: 'folder' | 'task'
+      taskIdMap: Record<string, string>
+    }
+
+    setTaskDetails((prev) => {
+      const next = { ...prev }
+
+      Object.entries(result.taskIdMap).forEach(
+        ([sourceTaskId, copiedTaskId]) => {
+          const sourceDetail = prev[sourceTaskId]
+
+          if (!sourceDetail) {
+            return
+          }
+
+          const copiedDetail = structuredClone(sourceDetail) as TaskDetail
+          next[copiedTaskId] = {
+            ...copiedDetail,
+            id: `task-detail-${copiedTaskId}`,
+            navNodeId: copiedTaskId,
+          } as TaskDetail
+        },
+      )
+
+      return next
+    })
+
+    await loadTree()
+
+    if (result.type === 'task') {
+      setSelectedTaskId(result.id)
+      setActiveView('task')
+    }
+  }
+  const handleMoveNodeUp = async (nodeId: string) => {
+    await reorderNavigationNode(nodeId, 'up')
+    await loadTree()
+  }
+  const handleMoveNodeDown = async (nodeId: string) => {
+    await reorderNavigationNode(nodeId, 'down')
+    await loadTree()
+  }
+  const handleDropNode = async (
+    nodeId: string,
+    targetNodeId: string,
+    position: 'before' | 'after' | 'inside',
+  ) => {
+    await dropNavigationNode(nodeId, targetNodeId, position)
+    await loadTree()
+  }
+  const handleDropNodeToRoot = async (nodeId: string) => {
+    await moveNavigationNode(nodeId, null)
+    await loadTree()
+  }
+
+  const buildDefaultTaskDetail = (
+    taskId: string,
+    title: string,
+    parentId: string | null,
+    detail: TaskDetailRecord,
+  ) => {
     const parentNode = parentId
       ? navigationTree.find((node) => node.id === parentId)
       : null
 
     return {
-      id: `task-detail-${taskId}`,
+      id: detail.id,
       navNodeId: taskId,
       path: parentNode ? `${parentNode.title} > ${title}` : title,
       title,
-      description: '새로 생성된 Task입니다.',
-      dueDate: '2026-08-31',
-      alarm: '2026-08-31 09:00:00',
-      assignee: 'JH Jae-Ryong Ha',
-      attachments: [],
+      description: detail.description,
+      dueDate: detail.dueDate,
+      alarm: detail.alarm,
+      assignee: detail.assignee,
+      assignees: detail.assignees,
+      completed: detail.completed,
+      attachments: detail.attachments,
       subTasks: [],
       memo: '',
+      memoAuthor: '',
+      memoUpdatedAt: '',
       comments: [],
     } as TaskDetail
   }
@@ -167,18 +451,24 @@ function MainLayout() {
   }
 
   const handleCreateTask = async (title: string, parentId: string | null) => {
-    const result = (await createTask(title, parentId)) as { id: string }
+    const result = (await createTask(title, parentId)) as {
+      id: string
+      detail: TaskDetailRecord
+    }
 
     setTaskDetails((prev) => ({
       ...prev,
-      [result.id]: buildDefaultTaskDetail(result.id, title, parentId),
+      [result.id]: buildDefaultTaskDetail(result.id, title, parentId, result.detail),
     }))
 
     await loadTree()
     setSelectedTaskId(result.id)
+    setActiveView('task')
   }
 
-  const handleToggleSubTask = (subTaskId: string) => {
+  const handleToggleSubTask = async (subTaskId: string) => {
+    const updatedSubTask = await toggleSubTask(subTaskId)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -189,17 +479,19 @@ function MainLayout() {
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          subTasks: currentTask.subTasks.map((subTask) =>
+          subTasks: sortSubTasks(currentTask.subTasks.map((subTask) =>
             subTask.id === subTaskId
-              ? { ...subTask, completed: !subTask.completed }
+              ? updatedSubTask
               : subTask,
-          ),
+          )),
         },
       }
     })
   }
 
-  const handleAddSubTask = (title: string) => {
+  const handleAddSubTask = async (title: string) => {
+    const createdSubTask = await createSubTask(selectedTaskId, title)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -210,22 +502,18 @@ function MainLayout() {
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          subTasks: [
+          subTasks: sortSubTasks([
             ...currentTask.subTasks,
-            {
-              id: `subtask-${Date.now()}`,
-              title,
-              dueDate: currentTask.dueDate,
-              assignee: currentTask.assignee.split(' ')[0],
-              completed: false,
-            },
-          ],
+            createdSubTask,
+          ]),
         },
       }
     })
   }
 
-  const handleDeleteSubTask = (subTaskId: string) => {
+  const handleDeleteSubTask = async (subTaskId: string) => {
+    await deleteSubTask(subTaskId)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -242,11 +530,13 @@ function MainLayout() {
     })
   }
 
-  const handleUpdateSubTask = (
+  const handleUpdateSubTask = async (
     subTaskId: string,
-    field: 'dueDate' | 'assignee',
+    field: 'title' | 'dueDate' | 'assignee',
     value: string,
   ) => {
+    const updatedSubTask = await updateSubTask(subTaskId, field, value)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -257,20 +547,19 @@ function MainLayout() {
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          subTasks: currentTask.subTasks.map((subTask) =>
+          subTasks: sortSubTasks(currentTask.subTasks.map((subTask) =>
             subTask.id === subTaskId
-              ? {
-                  ...subTask,
-                  [field]: value,
-                }
+              ? updatedSubTask
               : subTask,
-          ),
+          )),
         },
       }
     })
   }
 
-  const handleSaveMemo = (nextMemo: string) => {
+  const handleSaveMemo = async (nextMemo: string) => {
+    const savedMemo = await saveMemo(selectedTaskId, nextMemo)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -281,13 +570,21 @@ function MainLayout() {
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          memo: nextMemo,
+          memo: savedMemo.content,
+          memoAuthor: savedMemo.author,
+          memoUpdatedAt: savedMemo.updatedAt,
         },
       }
     })
   }
 
-  const handleAddComment = (parentId: string | null, content: string) => {
+  const handleAddComment = async (parentId: string | null, content: string) => {
+    const createdComment = await createComment(
+      selectedTaskId,
+      parentId,
+      content,
+    )
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -300,21 +597,16 @@ function MainLayout() {
           ...currentTask,
           comments: [
             ...currentTask.comments,
-            {
-              id: `comment-${Date.now()}`,
-              parentId,
-              author: 'JH',
-              createdAt: new Date().toLocaleString('sv-SE').replace('T', ' '),
-              content,
-              deleted: false,
-            },
+            createdComment,
           ],
         },
       }
     })
   }
 
-  const handleEditComment = (commentId: string, nextContent: string) => {
+  const handleEditComment = async (commentId: string, nextContent: string) => {
+    const updatedComment = await updateComment(commentId, nextContent)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -327,10 +619,7 @@ function MainLayout() {
           ...currentTask,
           comments: currentTask.comments.map((comment) =>
             comment.id === commentId
-              ? {
-                  ...comment,
-                  content: nextContent,
-                }
+              ? updatedComment
               : comment,
           ),
         },
@@ -338,7 +627,9 @@ function MainLayout() {
     })
   }
 
-  const handleDeleteComment = (commentId: string) => {
+  const handleDeleteComment = async (commentId: string) => {
+    const deletedComment = await deleteComment(commentId)
+
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
       if (!currentTask) {
@@ -351,65 +642,202 @@ function MainLayout() {
           ...currentTask,
           comments: currentTask.comments.map((comment) =>
             comment.id === commentId
-              ? {
-                  ...comment,
-                  content: '',
-                  deleted: true,
-                }
+              ? deletedComment
               : comment,
           ),
         },
       }
     })
+  }
+
+  const handleAddAttachment = async () => {
+    const attachment = await selectAndCreateAttachment(selectedTaskId)
+
+    if (!attachment) {
+      return
+    }
+
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+
+      if (!currentTask) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          attachments: [...currentTask.attachments, attachment],
+        },
+      }
+    })
+
+  }
+
+  const handleOpenAttachment = async (attachmentId: string) => {
+    await openAttachment(attachmentId)
+  }
+
+  const handleToggleTaskCompleted = async () => {
+    const updatedTask = await toggleTaskCompleted(selectedTaskId)
+
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+
+      if (!currentTask) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          completed: updatedTask.completed,
+        },
+      }
+    })
+
+    setNavigationTree((prev) =>
+      prev.map((node) =>
+        node.id === selectedTaskId
+          ? { ...node, completed: updatedTask.completed }
+          : node,
+      ),
+    )
+  }
+
+  const handleUpdateTaskField = async (
+    field: 'dueDate' | 'alarm',
+    value: string,
+  ) => {
+    const currentTask = taskDetails[selectedTaskId]
+
+    if (!currentTask) {
+      return
+    }
+
+    const updatedTask = await updateTaskDetail(selectedTaskId, {
+      title: currentTask.title,
+      description: currentTask.description,
+      dueDate: field === 'dueDate' ? value : currentTask.dueDate,
+      alarm: field === 'alarm' ? value : currentTask.alarm,
+      assignee: currentTask.assignee,
+      assigneeIds: currentTask.assignees.map((assignee) => assignee.id),
+      manualAssigneeNames: [],
+    })
+
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+
+      if (!currentTask) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          dueDate: updatedTask.dueDate,
+          alarm: updatedTask.alarm,
+          assignee: updatedTask.assignee,
+          assignees: updatedTask.assignees,
+        },
+      }
+    })
+
+  }
+
+  const handleUpdateTaskTitle = async (title: string) => {
+    const currentTask = taskDetails[selectedTaskId]
+    if (!currentTask) return
+
+    const updatedTask = await updateTaskDetail(selectedTaskId, {
+      title,
+      description: currentTask.description,
+      dueDate: currentTask.dueDate,
+      alarm: currentTask.alarm,
+      assignee: currentTask.assignee,
+      assigneeIds: currentTask.assignees.map((assignee) => assignee.id),
+      manualAssigneeNames: [],
+    })
+
+    const selectedNode = navigationTree.find((node) => node.id === selectedTaskId)
+    const parentNode = selectedNode?.parentId
+      ? navigationTree.find((node) => node.id === selectedNode.parentId)
+      : null
+    const path = parentNode ? `${parentNode.title} > ${updatedTask.title}` : updatedTask.title
+
+    setTaskDetails((prev) => ({
+      ...prev,
+      [selectedTaskId]: {
+        ...prev[selectedTaskId],
+        title: updatedTask.title,
+        path,
+      },
+    }))
+    setNavigationTree((prev) =>
+      prev.map((node) =>
+        node.id === selectedTaskId ? { ...node, title: updatedTask.title } : node,
+      ),
+    )
+  }
+
+  const handleUpdateTaskAssignees = async (
+    assigneeIds: string[],
+    manualAssigneeNames: string[],
+  ) => {
+    const currentTask = taskDetails[selectedTaskId]
+    if (!currentTask) {
+      return
+    }
+
+    const updatedTask = await updateTaskDetail(selectedTaskId, {
+      title: currentTask.title,
+      description: currentTask.description,
+      dueDate: currentTask.dueDate,
+      alarm: currentTask.alarm,
+      assignee: currentTask.assignee,
+      assigneeIds,
+      manualAssigneeNames,
+    })
+
+    setTaskDetails((prev) => ({
+      ...prev,
+      [selectedTaskId]: {
+        ...prev[selectedTaskId],
+        assignee: updatedTask.assignee,
+        assignees: updatedTask.assignees,
+      },
+    }))
+    setAssigneeUsers(await getAssigneeUsers())
   }
 
   const selectedTaskDetail = taskDetails[selectedTaskId]
-
-  if (!selectedTaskDetail) {
-    return (
-      <div
-        style={{
-          padding: 24,
-          fontSize: 14,
-          color: '#444',
-          fontFamily: 'sans-serif',
-        }}
-      >
-        선택된 Task에 대한 상세 데이터가 없습니다.
-      </div>
-    )
+  const handleSelectTask = (taskId: string) => {
+    setSelectedTaskId(taskId)
+    setActiveView('task')
   }
 
   return (
     <div
-      className="app-shell"
-      style={{ gridTemplateColumns: `${navigationWidth}px 14px 1fr`, position: 'relative' }}
+      className={`app-shell ${isNavigationCollapsed ? 'is-navigation-collapsed' : ''}`}
+      style={{
+        gridTemplateColumns: isNavigationCollapsed
+          ? '0 0 minmax(0, 1fr)'
+          : `${navigationWidth}px 8px minmax(0, 1fr)`,
+      }}
     >
-      <div
-        style={{
-          position: 'absolute',
-          top: 8,
-          right: 16,
-          fontSize: 12,
-          color: '#111',
-          zIndex: 10,
-          background: '#fff',
-          padding: '4px 8px',
-          borderRadius: 6,
-          border: '1px solid #ddd',
-          lineHeight: 1.5,
-        }}
-      >
-        <div>tree count: {navigationTree.length}</div>
-        <div>preload ok: {preloadOk}</div>
-        <div>api exists: {String(apiExists)}</div>
-        <div>navigation exists: {String(navigationApiExists)}</div>
-      </div>
-
-      <NavigationBar
+      {!isNavigationCollapsed && <NavigationBar
+        currentUser={currentUser}
+        onOpenAdmin={onOpenAdmin}
+        onLogout={onLogout}
+        onCollapse={() => setIsNavigationCollapsed(true)}
+        isBriefingActive={activeView === 'briefing'}
+        onOpenBriefing={() => setActiveView('briefing')}
         tree={navigationTree}
         selectedTaskId={selectedTaskId}
-        onSelectTask={setSelectedTaskId}
+        onSelectTask={handleSelectTask}
         onToggleFolder={handleToggleFolder}
         onRenameNode={handleRenameNode}
         onCreateFolder={handleCreateFolder}
@@ -421,34 +849,76 @@ function MainLayout() {
         onCopyNode={handleCopyNode}
         onMoveNodeUp={handleMoveNodeUp}
         onMoveNodeDown={handleMoveNodeDown}
-      />
+        onDropNode={handleDropNode}
+        onDropNodeToRoot={handleDropNodeToRoot}
+      />}
 
-      <div
+      {!isNavigationCollapsed && <div
         className="navigation-resize-handle"
         onMouseDown={handleResizeMouseDown}
         role="separator"
         aria-label="Navigation Bar 너비 조절"
       >
         <div className="navigation-resize-grip" />
-      </div>
+      </div>}
+
+      {isNavigationCollapsed && (
+        <button
+          className="navigation-expand-button"
+          type="button"
+          aria-label="Navigation Bar 펼치기"
+          title="Navigation Bar 펼치기"
+          onClick={() => setIsNavigationCollapsed(false)}
+        >
+          ›
+        </button>
+      )}
 
       <main className="detail-screen">
-        <TaskHeader taskDetail={selectedTaskDetail} />
-        <SubTaskSection
-          subTasks={selectedTaskDetail.subTasks}
-          onToggleSubTask={handleToggleSubTask}
-          onAddSubTask={handleAddSubTask}
-          onDeleteSubTask={handleDeleteSubTask}
-          onUpdateSubTask={handleUpdateSubTask}
-        />
-        <MemoSection
-          memo={selectedTaskDetail.memo}
-          comments={selectedTaskDetail.comments}
-          onSaveMemo={handleSaveMemo}
-          onAddComment={handleAddComment}
-          onEditComment={handleEditComment}
-          onDeleteComment={handleDeleteComment}
-        />
+        <div className="detail-content">
+          {activeView === 'briefing' ? (
+            <ToDoBriefing onOpenTask={handleSelectTask} />
+          ) : selectedTaskDetail ? (
+            <>
+              <TaskHeader
+                key={selectedTaskId}
+                taskDetail={selectedTaskDetail}
+                assigneeUsers={assigneeUsers}
+                onAddAttachment={handleAddAttachment}
+                onOpenAttachment={handleOpenAttachment}
+                onToggleCompleted={handleToggleTaskCompleted}
+                onUpdateTitle={handleUpdateTaskTitle}
+                onUpdateField={handleUpdateTaskField}
+                onUpdateAssignees={handleUpdateTaskAssignees}
+              />
+              <SubTaskSection
+                subTasks={selectedTaskDetail.subTasks}
+                taskAssignees={selectedTaskDetail.assignees}
+                onToggleSubTask={handleToggleSubTask}
+                onAddSubTask={handleAddSubTask}
+                onDeleteSubTask={handleDeleteSubTask}
+                onUpdateSubTask={handleUpdateSubTask}
+              />
+              <MemoSection
+                key={selectedTaskId}
+                memo={selectedTaskDetail.memo}
+                memoAuthor={selectedTaskDetail.memoAuthor}
+                memoUpdatedAt={selectedTaskDetail.memoUpdatedAt}
+                comments={selectedTaskDetail.comments}
+                onSaveMemo={handleSaveMemo}
+                onAddComment={handleAddComment}
+                onEditComment={handleEditComment}
+                onDeleteComment={handleDeleteComment}
+              />
+            </>
+          ) : (
+            <div className="empty-detail-state">
+              <div className="empty-detail-icon">✓</div>
+              <h1>선택할 Task가 없습니다</h1>
+              <p>왼쪽 Navigation에서 새 Task를 추가해 시작해 보세요.</p>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   )

@@ -1,6 +1,36 @@
-INSERT INTO users (id, name, email) VALUES
-  ('user-jh', 'JH', 'jh@example.com'),
-  ('user-ps', 'PS', 'ps@example.com');
+INSERT INTO users (
+  id, login_id, name, email, phone, password_hash, role, is_active
+) VALUES
+  (
+    'user-admin',
+    'admin',
+    'Administrator',
+    'admin@todo.local',
+    '',
+    'pbkdf2:210000:00112233445566778899aabbccddeeff:86353a8c977447bd17662e5db8921bd35a07c657169f985df9e883f93efc2c79b5d767d1dc7fb3dded6339e8d545d11eca71f78809a111ad11acdac79044fdf5',
+    'admin',
+    1
+  ),
+  (
+    'user-jh',
+    'jh',
+    'JH',
+    'jh@example.com',
+    '',
+    'pbkdf2:210000:ffeeddccbbaa99887766554433221100:06d3ed73208a70b6dbc227f4c4b30e75b46656cae278b9988749b61a5fd26530e559c23ad78a577eb8549aa39511f24769136402e0715e5e2a406e56087c45f2',
+    'user',
+    1
+  ),
+  (
+    'user-ps',
+    'ps',
+    'PS',
+    'ps@example.com',
+    '',
+    'pbkdf2:210000:ffeeddccbbaa99887766554433221100:06d3ed73208a70b6dbc227f4c4b30e75b46656cae278b9988749b61a5fd26530e559c23ad78a577eb8549aa39511f24769136402e0715e5e2a406e56087c45f2',
+    'user',
+    1
+  );
 
 INSERT INTO nav_nodes (
   id, parent_id, node_type, title, order_index, is_expanded, owner_user_id
@@ -32,6 +62,11 @@ INSERT INTO task_details (
     'user-ps',
     '참석자 확정 이후 이동 계획과 숙박 여부를 함께 정리해야 함. VIP 참석 여부는 별도 확인 필요.'
   );
+
+INSERT INTO task_assignees (task_detail_id, user_id, order_index)
+VALUES
+  ('task-detail-1', 'user-jh', 0),
+  ('task-detail-2', 'user-ps', 0);
 
 INSERT INTO sub_tasks (
   id, task_detail_id, title, due_date, assignee_user_id, completed, order_index

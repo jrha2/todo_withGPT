@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>투자기획팀 업무관리 공간 - 미리 알림</title>
+    <link rel="stylesheet" href="./reminder.css" />
+    <script src="./reminder.js" defer></script>
+  </head>
+  <body>
+    <header class="reminder-header">
+      <div>
+        <div class="eyebrow">TEAM TASK REMINDER</div>
+        <h1>미리 알림</h1>
+      </div>
+      <button id="hide-window" class="window-close" type="button" aria-label="창 닫기">
+        ×
+      </button>
+    </header>
+
+    <main>
+      <div id="summary" class="summary"></div>
+      <div id="reminder-list" class="reminder-list"></div>
+    </main>
+  </body>
+</html>
