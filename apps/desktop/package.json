@@ -4,7 +4,7 @@
   "description": "팀 업무와 알림을 관리하는 데스크톱 To Do 앱",
   "author": "jrha2",
   "private": true,
-  "version": "0.9.2-beta.0",
+  "version": "0.9.8-beta.0",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -29,6 +29,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "http://127.0.0.1:4310/updates",
+        "useMultipleRangeRequest": false
+      }
+    ],
     "files": [
       "dist/**/*",
       "electron/main.js",
@@ -62,6 +69,7 @@
   "dependencies": {
     "better-sqlite3": "^13.0.2",
     "date-holidays": "^3.26.7",
+    "electron-updater": "^6.8.9",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

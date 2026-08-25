@@ -15,7 +15,13 @@ import {
   getComments,
   updateComment,
 } from '../services/api/commentApi'
-import { getMemo, saveMemo } from '../services/api/memoApi'
+import {
+  createMemo,
+  deleteMemo,
+  getMemos,
+  updateMemo,
+  type RichMemoRecord,
+} from '../services/api/memoApi'
 import {
   copyNavigationNode,
   createFolder,
@@ -32,6 +38,7 @@ import {
   createSubTask,
   deleteSubTask,
   getSubTasks,
+  reorderSubTasks,
   toggleSubTask,
   updateSubTask,
   type SubTaskRecord,
@@ -71,9 +78,7 @@ type TaskDetail = {
   completed: boolean
   attachments: Array<{ id: string; name: string }>
   subTasks: SubTaskRecord[]
-  memo: string
-  memoAuthor: string
-  memoUpdatedAt: string
+  memos: RichMemoRecord[]
   comments: Array<{
     id: string
     parentId: string | null
@@ -226,10 +231,10 @@ function MainLayout({
 
     const loadTaskContent = async () => {
       try {
-        const [taskDetail, subTasks, memo, comments] = await Promise.all([
+        const [taskDetail, subTasks, memos, comments] = await Promise.all([
           getTaskDetail(selectedTaskId),
           getSubTasks(selectedTaskId),
-          getMemo(selectedTaskId),
+          getMemos(selectedTaskId),
           getComments(selectedTaskId),
         ])
 
@@ -244,28 +249,23 @@ function MainLayout({
           ? `${parentNode.title} > ${taskDetail.title}`
           : taskDetail.title
 
-        setTaskDetails((prev) => {
-          return {
-            ...prev,
-            [selectedTaskId]: {
-              id: taskDetail.id,
-              navNodeId: taskDetail.navNodeId,
-              path: taskPath,
-              title: taskDetail.title,
-              description: taskDetail.description,
-              dueDate: taskDetail.dueDate,
-              alarm: taskDetail.alarm,
-              assignee: taskDetail.assignee,
-              assignees: taskDetail.assignees,
-              completed: taskDetail.completed,
-              attachments: taskDetail.attachments,
-              subTasks: sortSubTasks(subTasks),
-              memo: memo.content,
-              memoAuthor: memo.author,
-              memoUpdatedAt: memo.updatedAt,
-              comments,
-            },
-          }
+        setTaskDetails({
+          [selectedTaskId]: {
+            id: taskDetail.id,
+            navNodeId: taskDetail.navNodeId,
+            path: taskPath,
+            title: taskDetail.title,
+            description: taskDetail.description,
+            dueDate: taskDetail.dueDate,
+            alarm: taskDetail.alarm,
+            assignee: taskDetail.assignee,
+            assignees: taskDetail.assignees,
+            completed: taskDetail.completed,
+            attachments: taskDetail.attachments,
+            subTasks,
+            memos,
+            comments,
+          },
         })
       } catch (error) {
         console.error('Failed to load Task content from DB:', error)
@@ -438,9 +438,7 @@ function MainLayout({
       completed: detail.completed,
       attachments: detail.attachments,
       subTasks: [],
-      memo: '',
-      memoAuthor: '',
-      memoUpdatedAt: '',
+      memos: [],
       comments: [],
     } as TaskDetail
   }
@@ -479,11 +477,11 @@ function MainLayout({
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          subTasks: sortSubTasks(currentTask.subTasks.map((subTask) =>
+          subTasks: currentTask.subTasks.map((subTask) =>
             subTask.id === subTaskId
               ? updatedSubTask
               : subTask,
-          )),
+          ),
         },
       }
     })
@@ -502,10 +500,10 @@ function MainLayout({
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          subTasks: sortSubTasks([
+          subTasks: [
             ...currentTask.subTasks,
             createdSubTask,
-          ]),
+          ],
         },
       }
     })
@@ -532,8 +530,8 @@ function MainLayout({
 
   const handleUpdateSubTask = async (
     subTaskId: string,
-    field: 'title' | 'dueDate' | 'assignee',
-    value: string,
+    field: 'title' | 'dueDate' | 'assignee' | 'assignees',
+    value: string | string[],
   ) => {
     const updatedSubTask = await updateSubTask(subTaskId, field, value)
 
@@ -547,18 +545,21 @@ function MainLayout({
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          subTasks: sortSubTasks(currentTask.subTasks.map((subTask) =>
+          subTasks: currentTask.subTasks.map((subTask) =>
             subTask.id === subTaskId
               ? updatedSubTask
               : subTask,
-          )),
+          ),
         },
       }
     })
   }
 
-  const handleSaveMemo = async (nextMemo: string) => {
-    const savedMemo = await saveMemo(selectedTaskId, nextMemo)
+  const saveSubTaskOrder = async (orderedItems: SubTaskRecord[]) => {
+    const savedItems = await reorderSubTasks(
+      selectedTaskId,
+      orderedItems.map((subTask) => subTask.id),
+    )
 
     setTaskDetails((prev) => {
       const currentTask = prev[selectedTaskId]
@@ -570,9 +571,79 @@ function MainLayout({
         ...prev,
         [selectedTaskId]: {
           ...currentTask,
-          memo: savedMemo.content,
-          memoAuthor: savedMemo.author,
-          memoUpdatedAt: savedMemo.updatedAt,
+          subTasks: savedItems,
+        },
+      }
+    })
+  }
+
+  const handleSortSubTasksByDueDate = async () => {
+    const currentTask = taskDetails[selectedTaskId]
+    if (!currentTask) return
+    await saveSubTaskOrder(sortSubTasks(currentTask.subTasks))
+  }
+
+  const handleReorderSubTasks = async (orderedIds: string[]) => {
+    const currentTask = taskDetails[selectedTaskId]
+    if (!currentTask) return
+
+    const itemMap = new Map(
+      currentTask.subTasks.map((subTask) => [subTask.id, subTask]),
+    )
+    const orderedItems = orderedIds
+      .map((id) => itemMap.get(id))
+      .filter((item): item is SubTaskRecord => Boolean(item))
+
+    if (orderedItems.length !== currentTask.subTasks.length) return
+    await saveSubTaskOrder(orderedItems)
+  }
+
+  const handleCreateMemo = async (contentHtml: string) => {
+    const savedMemo = await createMemo(selectedTaskId, contentHtml)
+
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+      if (!currentTask) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          memos: [...currentTask.memos, savedMemo],
+        },
+      }
+    })
+  }
+
+  const handleUpdateMemo = async (memoId: string, contentHtml: string) => {
+    const savedMemo = await updateMemo(memoId, contentHtml)
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+      if (!currentTask) return prev
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          memos: currentTask.memos.map((memo) =>
+            memo.id === memoId ? savedMemo : memo,
+          ),
+        },
+      }
+    })
+  }
+
+  const handleDeleteMemo = async (memoId: string) => {
+    await deleteMemo(memoId)
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+      if (!currentTask) return prev
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          memos: currentTask.memos.filter((memo) => memo.id !== memoId),
         },
       }
     })
@@ -815,6 +886,9 @@ function MainLayout({
 
   const selectedTaskDetail = taskDetails[selectedTaskId]
   const handleSelectTask = (taskId: string) => {
+    if (taskId !== selectedTaskId) {
+      setTaskDetails({})
+    }
     setSelectedTaskId(taskId)
     setActiveView('task')
   }
@@ -879,9 +953,12 @@ function MainLayout({
           {activeView === 'briefing' ? (
             <ToDoBriefing onOpenTask={handleSelectTask} />
           ) : selectedTaskDetail ? (
-            <>
+            <section
+              key={selectedTaskId}
+              className="selected-task-detail"
+              aria-label={`${selectedTaskDetail.title} 상세정보`}
+            >
               <TaskHeader
-                key={selectedTaskId}
                 taskDetail={selectedTaskDetail}
                 assigneeUsers={assigneeUsers}
                 onAddAttachment={handleAddAttachment}
@@ -891,6 +968,36 @@ function MainLayout({
                 onUpdateField={handleUpdateTaskField}
                 onUpdateAssignees={handleUpdateTaskAssignees}
               />
+              <section className="content-card detail-task-list-card">
+                <div className="detail-task-list-heading">
+                  <div><span>FOLDER TASKS</span><strong>현재 폴더 업무 목록</strong></div>
+                  <small>
+                    {navigationTree.filter((node) =>
+                      node.type === 'task' &&
+                      node.parentId === navigationTree.find((item) => item.id === selectedTaskId)?.parentId
+                    ).length}개
+                  </small>
+                </div>
+                <div className="detail-task-list">
+                  {navigationTree
+                    .filter((node) =>
+                      node.type === 'task' &&
+                      node.parentId === navigationTree.find((item) => item.id === selectedTaskId)?.parentId
+                    )
+                    .sort((left, right) => left.order - right.order)
+                    .map((node) => (
+                      <button
+                        className={`${node.id === selectedTaskId ? 'is-current' : ''}${node.completed ? ' is-completed' : ''}`}
+                        type="button"
+                        key={node.id}
+                        onClick={() => handleSelectTask(node.id)}
+                      >
+                        <i aria-hidden="true">{node.completed ? '✓' : '○'}</i>
+                        <span>{node.title}</span>
+                      </button>
+                    ))}
+                </div>
+              </section>
               <SubTaskSection
                 subTasks={selectedTaskDetail.subTasks}
                 taskAssignees={selectedTaskDetail.assignees}
@@ -898,19 +1005,21 @@ function MainLayout({
                 onAddSubTask={handleAddSubTask}
                 onDeleteSubTask={handleDeleteSubTask}
                 onUpdateSubTask={handleUpdateSubTask}
+                onSortByDueDate={handleSortSubTasksByDueDate}
+                onReorderSubTasks={handleReorderSubTasks}
               />
               <MemoSection
                 key={selectedTaskId}
-                memo={selectedTaskDetail.memo}
-                memoAuthor={selectedTaskDetail.memoAuthor}
-                memoUpdatedAt={selectedTaskDetail.memoUpdatedAt}
+                memos={selectedTaskDetail.memos}
                 comments={selectedTaskDetail.comments}
-                onSaveMemo={handleSaveMemo}
+                onCreateMemo={handleCreateMemo}
+                onUpdateMemo={handleUpdateMemo}
+                onDeleteMemo={handleDeleteMemo}
                 onAddComment={handleAddComment}
                 onEditComment={handleEditComment}
                 onDeleteComment={handleDeleteComment}
               />
-            </>
+            </section>
           ) : (
             <div className="empty-detail-state">
               <div className="empty-detail-icon">✓</div>

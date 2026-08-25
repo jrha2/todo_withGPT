@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, MouseEvent } from 'react'
 import type { AuthUser } from '../../../services/api/authApi'
 
@@ -114,14 +114,45 @@ function NavigationBar({
   const [copyTargetFolderId, setCopyTargetFolderId] = useState('')
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null)
   const [dropTargetState, setDropTargetState] = useState<DropTargetState>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase()
+  const isSearching = normalizedSearchQuery.length > 0
+
+  useEffect(() => {
+    const handleSearchShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+
+    window.addEventListener('keydown', handleSearchShortcut)
+    return () => window.removeEventListener('keydown', handleSearchShortcut)
+  }, [])
 
   const visibleNodes = useMemo(() => {
     const childrenMap = new Map<string | null, NavigationNode[]>()
+    const nodeMap = new Map(tree.map((node) => [node.id, node]))
+    const includedNodeIds = new Set<string>()
 
     tree.forEach((node) => {
       const siblings = childrenMap.get(node.parentId) ?? []
       siblings.push(node)
       childrenMap.set(node.parentId, siblings)
+
+      if (isSearching && node.title.toLocaleLowerCase().includes(normalizedSearchQuery)) {
+        let currentNode: NavigationNode | undefined = node
+        const visitedNodeIds = new Set<string>()
+
+        while (currentNode && !visitedNodeIds.has(currentNode.id)) {
+          includedNodeIds.add(currentNode.id)
+          visitedNodeIds.add(currentNode.id)
+          currentNode = currentNode.parentId
+            ? nodeMap.get(currentNode.parentId)
+            : undefined
+        }
+      }
     })
 
     childrenMap.forEach((siblings) => {
@@ -131,7 +162,10 @@ function NavigationBar({
     const result: RenderNode[] = []
 
     const walk = (parentId: string | null, depth: number) => {
-      const children = childrenMap.get(parentId) ?? []
+      const allChildren = childrenMap.get(parentId) ?? []
+      const children = isSearching
+        ? allChildren.filter((node) => includedNodeIds.has(node.id))
+        : allChildren
 
       children.forEach((node, index) => {
         result.push({
@@ -140,7 +174,7 @@ function NavigationBar({
           isLastSibling: index === children.length - 1,
         })
 
-        if (childCreateState?.parentId === node.id) {
+        if (!isSearching && childCreateState?.parentId === node.id) {
           result.push({
             id: `__create__${node.id}`,
             parentId: node.id,
@@ -153,7 +187,7 @@ function NavigationBar({
           })
         }
 
-        if (moveState?.nodeId === node.id) {
+        if (!isSearching && moveState?.nodeId === node.id) {
           result.push({
             id: `__move__${node.id}`,
             parentId: node.parentId,
@@ -166,7 +200,7 @@ function NavigationBar({
           })
         }
 
-        if (copyState?.nodeId === node.id) {
+        if (!isSearching && copyState?.nodeId === node.id) {
           result.push({
             id: `__copy__${node.id}`,
             parentId: node.parentId,
@@ -179,7 +213,7 @@ function NavigationBar({
           })
         }
 
-        if (node.type === 'folder' && node.expanded) {
+        if (node.type === 'folder' && (node.expanded || isSearching)) {
           walk(node.id, depth + 1)
         }
       })
@@ -188,7 +222,14 @@ function NavigationBar({
     walk(null, 0)
 
     return result
-  }, [tree, childCreateState, moveState, copyState])
+  }, [
+    tree,
+    childCreateState,
+    moveState,
+    copyState,
+    isSearching,
+    normalizedSearchQuery,
+  ])
 
   const deleteTarget = deleteTargetId
     ? tree.find((node) => node.id === deleteTargetId) ?? null
@@ -235,11 +276,13 @@ function NavigationBar({
     event.preventDefault()
     event.stopPropagation()
 
+    const menuWidth = 176
+    const menuHeight = nodeType === 'folder' ? 260 : 205
     setMenuState({
       nodeId,
       nodeType,
-      x: event.clientX,
-      y: event.clientY,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
     })
   }
 
@@ -544,7 +587,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Beta 0.9.2</div>
+            <div className="navigation-subtitle">업무관리 공간 · Beta 0.9.8</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -584,8 +627,21 @@ function NavigationBar({
 
       <div className="navigation-search">
         <span className="navigation-search-icon">⌕</span>
-        <input type="text" placeholder="폴더 또는 Task 검색" />
-        <kbd>⌘ K</kbd>
+        <input
+          ref={searchInputRef}
+          type="search"
+          value={searchQuery}
+          placeholder="폴더 또는 Task 검색"
+          aria-label="폴더 또는 Task 검색"
+          onChange={(event) => setSearchQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setSearchQuery('')
+              event.currentTarget.blur()
+            }
+          }}
+        />
+        <kbd>Ctrl K</kbd>
       </div>
 
       <div className="navigation-account-card">
@@ -662,7 +718,11 @@ function NavigationBar({
 
       <div className="navigation-section-header">
         <span>프로젝트</span>
-        <span>{tree.filter((node) => node.type === 'task').length}</span>
+        <span>
+          {isSearching
+            ? visibleNodes.filter((node) => node.type === 'task').length
+            : tree.filter((node) => node.type === 'task').length}
+        </span>
       </div>
 
       <div
@@ -810,7 +870,7 @@ function NavigationBar({
                 .filter(Boolean)
                 .join(' ')}
               key={node.id}
-              draggable={!isEditing}
+              draggable={!isEditing && !isSearching}
               onContextMenu={(event) => openMenu(event, node.id, node.type)}
               onDragStart={(event) => handleNodeDragStart(event, node.id)}
               onDragOver={(event) => handleNodeDragOver(event, node)}
@@ -839,7 +899,7 @@ function NavigationBar({
                     {node.type === 'folder' ? (
                       <>
                         <span
-                          className={`tree-node-chevron ${node.expanded ? 'is-expanded' : ''}`}
+                          className={`tree-node-chevron ${node.expanded || isSearching ? 'is-expanded' : ''}`}
                           aria-hidden="true"
                         >
                           <svg viewBox="0 0 16 16">
@@ -920,6 +980,11 @@ function NavigationBar({
             </div>
           )
         })}
+        {isSearching && visibleNodes.length === 0 && (
+          <div className="navigation-search-empty" role="status">
+            검색 결과가 없습니다.
+          </div>
+        )}
       </div>
 
       {menuState && (

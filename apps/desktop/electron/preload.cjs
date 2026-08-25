@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
     updateUser: (userId, changes) =>
       ipcRenderer.invoke('admin:updateUser', { userId, changes }),
     deleteUser: (userId) => ipcRenderer.invoke('admin:deleteUser', userId),
+    getUserReferences: (userId) =>
+      ipcRenderer.invoke('admin:getUserReferences', userId),
   },
   app: {
     onSelectTask: (callback) => {
@@ -91,10 +93,18 @@ contextBridge.exposeInMainWorld('api', {
     delete: (subTaskId) => ipcRenderer.invoke('subTask:delete', subTaskId),
     update: (subTaskId, field, value) =>
       ipcRenderer.invoke('subTask:update', { subTaskId, field, value }),
+    reorder: (taskId, orderedIds) =>
+      ipcRenderer.invoke('subTask:reorder', { taskId, orderedIds }),
   },
   memo: {
     getByTask: (taskId) => ipcRenderer.invoke('memo:getByTask', taskId),
     save: (taskId, memo) => ipcRenderer.invoke('memo:save', { taskId, memo }),
+    getAllByTask: (taskId) => ipcRenderer.invoke('memo:getAllByTask', taskId),
+    create: (taskId, contentHtml) =>
+      ipcRenderer.invoke('memo:create', { taskId, contentHtml }),
+    update: (memoId, contentHtml) =>
+      ipcRenderer.invoke('memo:update', { memoId, contentHtml }),
+    delete: (memoId) => ipcRenderer.invoke('memo:delete', memoId),
   },
   comment: {
     getByTask: (taskId) => ipcRenderer.invoke('comment:getByTask', taskId),

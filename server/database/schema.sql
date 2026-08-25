@@ -46,6 +46,18 @@ CREATE TABLE task_details (
   FOREIGN KEY (memo_author_user_id) REFERENCES users(id)
 );
 
+CREATE TABLE memos (
+  id TEXT PRIMARY KEY,
+  task_detail_id TEXT NOT NULL,
+  content_html TEXT NOT NULL DEFAULT '',
+  author_user_id TEXT NOT NULL,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (task_detail_id) REFERENCES task_details(id) ON DELETE CASCADE,
+  FOREIGN KEY (author_user_id) REFERENCES users(id)
+);
+
 CREATE TABLE sub_tasks (
   id TEXT PRIMARY KEY,
   task_detail_id TEXT NOT NULL,
@@ -58,6 +70,16 @@ CREATE TABLE sub_tasks (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (task_detail_id) REFERENCES task_details(id) ON DELETE CASCADE,
   FOREIGN KEY (assignee_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE sub_task_assignees (
+  sub_task_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (sub_task_id, user_id),
+  FOREIGN KEY (sub_task_id) REFERENCES sub_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE comments (
@@ -168,6 +190,9 @@ CREATE UNIQUE INDEX idx_task_details_nav_node
 CREATE INDEX idx_task_details_assignee
   ON task_details(assignee_user_id);
 
+CREATE INDEX idx_memos_task_order
+  ON memos(task_detail_id, order_index, created_at);
+
 CREATE INDEX idx_task_assignees_user
   ON task_assignees(user_id, task_detail_id);
 
@@ -176,6 +201,9 @@ CREATE INDEX idx_sub_tasks_task_order
 
 CREATE INDEX idx_sub_tasks_assignee
   ON sub_tasks(assignee_user_id);
+
+CREATE INDEX idx_sub_task_assignees_user
+  ON sub_task_assignees(user_id, sub_task_id);
 
 CREATE INDEX idx_comments_task_parent_created
   ON comments(task_detail_id, parent_comment_id, created_at);

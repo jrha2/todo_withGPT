@@ -3,9 +3,11 @@ import {
   createManagedUser,
   deleteManagedUser,
   getManagedUsers,
+  getManagedUserReferences,
   updateManagedUser,
   type AuthUser,
   type ManagedUserInput,
+  type ManagedUserReferences,
 } from '../../../services/api/authApi'
 
 type AdminUserManagerProps = {
@@ -66,6 +68,8 @@ function AdminUserManager({
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AuthUser | null>(null)
   const [deleteErrorMessage, setDeleteErrorMessage] = useState('')
+  const [deleteReferences, setDeleteReferences] = useState<ManagedUserReferences | null>(null)
+  const [isLoadingReferences, setIsLoadingReferences] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
 
   const loadUsers = async (nextSelectedId?: string) => {
@@ -172,6 +176,21 @@ function AdminUserManager({
       setDeleteErrorMessage(getErrorMessage(error))
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const openDeleteDialog = async (user: AuthUser) => {
+    setDeleteTarget(user)
+    setDeleteErrorMessage('')
+    setDeleteReferences(null)
+    setIsLoadingReferences(true)
+    try {
+      setDeleteReferences(await getManagedUserReferences(user.id))
+    } catch (error) {
+      console.error('Failed to load user references:', error)
+      setDeleteErrorMessage('연결된 업무 정보를 불러오지 못했습니다.')
+    } finally {
+      setIsLoadingReferences(false)
     }
   }
 
@@ -306,8 +325,7 @@ function AdminUserManager({
                   onClick={() => {
                     const selected = users.find((user) => user.id === selectedUserId)
                     if (selected) {
-                      setDeleteErrorMessage('')
-                      setDeleteTarget(selected)
+                      void openDeleteDialog(selected)
                     }
                   }}
                 >
@@ -330,12 +348,40 @@ function AdminUserManager({
                 “{deleteTarget.name}” 사용자를 삭제하시겠습니까?
                 <br />
                 작성하거나 담당하는 기존 데이터가 있으면 삭제되지 않습니다.
+                {isLoadingReferences && (
+                  <div className="admin-reference-loading">연결된 업무를 확인하고 있습니다…</div>
+                )}
+                {deleteReferences && deleteReferences.tasks.length > 0 && (
+                  <div className="admin-reference-list">
+                    <strong>삭제 전에 정리해야 할 업무</strong>
+                    {deleteReferences.tasks.map((task) => (
+                      <div key={task.taskId}>
+                        <span>{task.title}</span>
+                        <small>{task.relations.join(' · ')}</small>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {deleteReferences && deleteReferences.folders.length > 0 && (
+                  <div className="admin-reference-summary">
+                    소유 폴더 {deleteReferences.folders.length}개
+                  </div>
+                )}
+                {deleteReferences && deleteReferences.activityCount > 0 && (
+                  <div className="admin-reference-summary">
+                    변경 기록 {deleteReferences.activityCount}건
+                  </div>
+                )}
                 {deleteErrorMessage && (
                   <div className="admin-delete-error">{deleteErrorMessage}</div>
                 )}
               </div>
               <div className="confirm-modal-actions">
-                <button type="button" disabled={isDeleting} onClick={handleDelete}>
+                <button
+                  type="button"
+                  disabled={isDeleting || isLoadingReferences || Boolean(deleteReferences?.hasRelatedData)}
+                  onClick={handleDelete}
+                >
                   {isDeleting ? '확인 중…' : '삭제'}
                 </button>
                 <button
@@ -343,6 +389,7 @@ function AdminUserManager({
                   onClick={() => {
                     setDeleteTarget(null)
                     setDeleteErrorMessage('')
+                    setDeleteReferences(null)
                   }}
                 >
                   취소

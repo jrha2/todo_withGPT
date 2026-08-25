@@ -364,6 +364,22 @@ export async function deleteSubTaskOnServer(token, subTaskId) {
   return data.result
 }
 
+export async function getUserReferencesFromServer(token, userId) {
+  const data = await request(
+    `/api/admin/users/${encodeURIComponent(userId)}/references`,
+    { token },
+  )
+  return data.references
+}
+
+export async function reorderSubTasksOnServer(token, taskId, orderedIds) {
+  const data = await request(
+    `/api/tasks/${encodeURIComponent(taskId)}/subtasks/order`,
+    { method: 'PUT', token, body: { orderedIds } },
+  )
+  return data.subTasks
+}
+
 export async function getMemoFromServer(token, taskId) {
   const data = await request(`/api/tasks/${encodeURIComponent(taskId)}/memo`, {
     token,
@@ -378,6 +394,39 @@ export async function saveMemoOnServer(token, taskId, memo) {
     body: { memo },
   })
   return data.memo
+}
+
+export async function getMemosFromServer(token, taskId) {
+  const data = await request(`/api/tasks/${encodeURIComponent(taskId)}/memos`, {
+    token,
+  })
+  return data.memos
+}
+
+export async function createMemoOnServer(token, taskId, contentHtml) {
+  const data = await request(`/api/tasks/${encodeURIComponent(taskId)}/memos`, {
+    method: 'POST',
+    token,
+    body: { contentHtml },
+  })
+  return data.memo
+}
+
+export async function updateMemoOnServer(token, memoId, contentHtml) {
+  const data = await request(`/api/memos/${encodeURIComponent(memoId)}`, {
+    method: 'PUT',
+    token,
+    body: { contentHtml },
+  })
+  return data.memo
+}
+
+export async function deleteMemoOnServer(token, memoId) {
+  const data = await request(`/api/memos/${encodeURIComponent(memoId)}`, {
+    method: 'DELETE',
+    token,
+  })
+  return data.result
 }
 
 export async function getCommentsFromServer(token, taskId) {

@@ -4,6 +4,7 @@ export type SubTaskRecord = {
   dueDate: string
   assigneeId: string
   assignee: string
+  assignees: Array<{ id: string; name: string; email: string }>
   completed: boolean
   createdAt: string
   creationOrder: number
@@ -43,8 +44,8 @@ export async function deleteSubTask(subTaskId: string) {
 
 export async function updateSubTask(
   subTaskId: string,
-  field: 'title' | 'dueDate' | 'assignee',
-  value: string,
+  field: 'title' | 'dueDate' | 'assignee' | 'assignees',
+  value: string | string[],
 ) {
   if (!window.api?.subTask?.update) {
     throw new Error('Sub Task API is not available')
@@ -55,4 +56,15 @@ export async function updateSubTask(
     field,
     value,
   ) as Promise<SubTaskRecord>
+}
+
+export async function reorderSubTasks(taskId: string, orderedIds: string[]) {
+  if (!window.api?.subTask?.reorder) {
+    throw new Error('Sub Task reorder API is not available')
+  }
+
+  return window.api.subTask.reorder(
+    taskId,
+    orderedIds,
+  ) as Promise<SubTaskRecord[]>
 }

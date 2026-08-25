@@ -15,16 +15,19 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Holidays from 'date-holidays'
+import electronUpdater from 'electron-updater'
 import {
   copyNavigationOnServer,
   createCommentOnServer,
   createFolderOnServer,
+  createMemoOnServer,
   createSubTaskOnServer,
   createTaskOnServer,
   createUserOnServer,
   deleteUserOnServer,
   deleteCommentOnServer,
   deleteNavigationOnServer,
+  deleteMemoOnServer,
   deleteSubTaskOnServer,
   dismissReminderOnServer,
   downloadAttachmentFromServer,
@@ -34,6 +37,7 @@ import {
   getDueRemindersFromServer,
   getBriefingFromServer,
   getMemoFromServer,
+  getMemosFromServer,
   getNavigationFromServer,
   getServerSession,
   getSyncStateFromServer,
@@ -41,11 +45,13 @@ import {
   getSubTasksFromServer,
   getTaskFromServer,
   getUsersFromServer,
+  getUserReferencesFromServer,
   loginToServer,
   logoutFromServer,
   moveNavigationOnServer,
   renameNavigationOnServer,
   reorderNavigationOnServer,
+  reorderSubTasksOnServer,
   saveMemoOnServer,
   completeReminderOnServer,
   setServerUrl,
@@ -57,11 +63,14 @@ import {
   snoozeReminderOnServer,
   uploadAttachmentToServer,
   updateCommentOnServer,
+  updateMemoOnServer,
   updateSubTaskOnServer,
   updateTaskOnServer,
   updateUserOnServer,
   streamSyncEventsFromServer,
 } from './server-api.js'
+
+const { autoUpdater } = electronUpdater
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -80,6 +89,7 @@ let isQuitting = false
 let reminderCheckRunning = false
 let reminderCheckTimer = null
 let dailyBriefingCheckTimer = null
+let dailyBriefingScheduleTimer = null
 let saveBoundsTimer = null
 let currentUser = null
 let currentAuthToken = null
@@ -93,6 +103,130 @@ koreanHolidays.setTimezone('Asia/Seoul')
 
 app.setAppUserModelId('com.jrha2.investmentplanningteamworkspace')
 setSyncRequestContext(syncClientId, 0)
+
+let updatePromptOpen = false
+let updateDownloadStarted = false
+let updateCheckRunning = false
+
+function getUpdateFeedUrl() {
+  return `${getServerUrl().replace(/\/$/, '')}/updates`
+}
+
+function setUpdateFeed() {
+  if (!app.isPackaged) return
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: getUpdateFeedUrl(),
+    useMultipleRangeRequest: false,
+  })
+}
+
+async function checkForAppUpdate() {
+  if (
+    !app.isPackaged ||
+    updatePromptOpen ||
+    updateDownloadStarted ||
+    updateCheckRunning
+  ) return
+
+  updateCheckRunning = true
+  try {
+    setUpdateFeed()
+    await autoUpdater.checkForUpdates()
+  } catch (error) {
+    console.error('[Update] Failed to check for updates:', error)
+  } finally {
+    updateCheckRunning = false
+  }
+}
+
+function configureAutoUpdater() {
+  if (!app.isPackaged) return
+
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.allowPrerelease = app.getVersion().includes('-')
+  autoUpdater.channel = app.getVersion().includes('-beta') ? 'beta' : 'latest'
+  setUpdateFeed()
+
+  autoUpdater.on('update-available', async (info) => {
+    if (updatePromptOpen || updateDownloadStarted) return
+    updatePromptOpen = true
+
+    const result = await dialog.showMessageBox(mainWindow || undefined, {
+      type: 'info',
+      title: '새 버전 업데이트',
+      message: `새 버전 ${info.version}이 준비되었습니다.`,
+      detail: '지금 다운로드하면 완료 후 앱을 재시작하여 자동으로 설치할 수 있습니다.',
+      buttons: ['지금 업데이트', '나중에'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    })
+
+    updatePromptOpen = false
+    if (result.response !== 0) return
+
+    updateDownloadStarted = true
+    try {
+      await autoUpdater.downloadUpdate()
+    } catch (error) {
+      updateDownloadStarted = false
+      console.error('[Update] Failed to download update:', error)
+      await dialog.showMessageBox(mainWindow || undefined, {
+        type: 'error',
+        title: '업데이트 다운로드 실패',
+        message: '업데이트 파일을 내려받지 못했습니다.',
+        detail: '서버 연결을 확인한 뒤 앱을 다시 실행해 주세요.',
+        buttons: ['확인'],
+      })
+    }
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(Math.max(0, Math.min(1, progress.percent / 100)))
+    }
+  })
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    updateDownloadStarted = false
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(-1)
+    }
+
+    const result = await dialog.showMessageBox(mainWindow || undefined, {
+      type: 'info',
+      title: '업데이트 준비 완료',
+      message: `버전 ${info.version} 다운로드가 완료되었습니다.`,
+      detail: '지금 앱을 재시작하면 업데이트가 자동으로 설치됩니다.',
+      buttons: ['재시작하여 설치', '종료할 때 설치'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    })
+
+    if (result.response === 0) {
+      isQuitting = true
+      autoUpdater.quitAndInstall(false, true)
+    }
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    updatePromptOpen = false
+  })
+
+  autoUpdater.on('error', (error) => {
+    updatePromptOpen = false
+    updateDownloadStarted = false
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(-1)
+    }
+    console.error('[Update] Auto updater error:', error)
+  })
+
+  setTimeout(checkForAppUpdate, 10 * 1000)
+}
 
 function sendRemoteSyncEvent(event) {
   if (!event || Number(event.revision) <= 0) return
@@ -136,9 +270,18 @@ async function startSyncEvents() {
         syncClientId,
         controller.signal,
         (event) => {
+          if (event?.kind === 'app-update') {
+            void checkForAppUpdate()
+            return
+          }
+
           const revision = Number(event?.revision) || 0
           const previousLatestRevision = latestServerRevision
           latestServerRevision = Math.max(latestServerRevision, revision)
+          if (event?.kind === 'connected') {
+            // 시작 중 놓친 배포가 있는지 연결/재연결 때 한 번 확인합니다.
+            void checkForAppUpdate()
+          }
           if (event?.kind === 'connected' && revision <= previousLatestRevision) {
             return
           }
@@ -458,9 +601,17 @@ function readDailyBriefingState() {
 
 function markDailyBriefingShown(date) {
   try {
+    const currentState = readDailyBriefingState()
+    const userKey = currentUser?.id || 'anonymous'
     writeFileSync(
       getDailyBriefingStatePath(),
-      JSON.stringify({ lastShownDate: formatLocalDate(date) }, null, 2),
+      JSON.stringify({
+        ...currentState,
+        lastShownByUser: {
+          ...(currentState.lastShownByUser || {}),
+          [userKey]: formatLocalDate(date),
+        },
+      }, null, 2),
       'utf8',
     )
   } catch (error) {
@@ -535,13 +686,27 @@ async function checkDailyBriefing() {
     const now = new Date()
     if (!isKoreanBusinessDay(now) || now.getHours() < 8) return
     const today = formatLocalDate(now)
-    if (readDailyBriefingState().lastShownDate === today) return
+    const state = readDailyBriefingState()
+    const userKey = currentUser.id
+    if (state.lastShownByUser?.[userKey] === today) return
 
     await showDailyBriefingWindow(true)
     markDailyBriefingShown(now)
   } catch (error) {
     console.error('[Briefing] Failed to show daily popup:', error)
   }
+}
+
+function scheduleNextDailyBriefingCheck() {
+  clearTimeout(dailyBriefingScheduleTimer)
+  const now = new Date()
+  const next = new Date(now)
+  next.setHours(8, 0, 2, 0)
+  if (next <= now) next.setDate(next.getDate() + 1)
+  dailyBriefingScheduleTimer = setTimeout(async () => {
+    await checkDailyBriefing()
+    scheduleNextDailyBriefingCheck()
+  }, Math.max(1000, next.getTime() - now.getTime()))
 }
 
 function sendReminderItems() {
@@ -701,6 +866,8 @@ function registerIpcHandlers() {
   ipcMain.handle('auth:setServerUrl', (_event, serverUrl) => {
     const value = setServerUrl(serverUrl)
     saveAuthSession(null)
+    setUpdateFeed()
+    setTimeout(checkForAppUpdate, 500)
     return { serverUrl: value }
   })
   ipcMain.handle('auth:getSession', () => currentUser)
@@ -786,6 +953,10 @@ function registerIpcHandlers() {
       throw new Error('ADMIN_CANNOT_DELETE_SELF')
     }
     return deleteUserOnServer(currentAuthToken, userId)
+  })
+  ipcMain.handle('admin:getUserReferences', async (_event, userId) => {
+    requireAdminUser()
+    return getUserReferencesFromServer(currentAuthToken, userId)
   })
 
   const handleAuthenticated = (channel, listener) => {
@@ -966,12 +1137,39 @@ function registerIpcHandlers() {
       payload.value,
     ),
   )
+  handleAuthenticated('subTask:reorder', (_event, payload) =>
+    reorderSubTasksOnServer(
+      currentAuthToken,
+      payload.taskId,
+      payload.orderedIds,
+    ),
+  )
 
   handleAuthenticated('memo:getByTask', (_event, taskId) =>
     getMemoFromServer(currentAuthToken, taskId),
   )
   handleAuthenticated('memo:save', (_event, payload) =>
     saveMemoOnServer(currentAuthToken, payload.taskId, payload.memo),
+  )
+  handleAuthenticated('memo:getAllByTask', (_event, taskId) =>
+    getMemosFromServer(currentAuthToken, taskId),
+  )
+  handleAuthenticated('memo:create', (_event, payload) =>
+    createMemoOnServer(
+      currentAuthToken,
+      payload.taskId,
+      payload.contentHtml,
+    ),
+  )
+  handleAuthenticated('memo:update', (_event, payload) =>
+    updateMemoOnServer(
+      currentAuthToken,
+      payload.memoId,
+      payload.contentHtml,
+    ),
+  )
+  handleAuthenticated('memo:delete', (_event, memoId) =>
+    deleteMemoOnServer(currentAuthToken, memoId),
   )
 
   handleAuthenticated('comment:getByTask', (_event, taskId) =>
@@ -1103,8 +1301,10 @@ app.whenReady().then(async () => {
 
   createTray()
   createMainWindow(!startedHidden)
+  configureAutoUpdater()
   reminderCheckTimer = setInterval(checkDueReminders, 30 * 1000)
   dailyBriefingCheckTimer = setInterval(checkDailyBriefing, 60 * 1000)
+  scheduleNextDailyBriefingCheck()
   setTimeout(checkDueReminders, 1500)
   setTimeout(checkDailyBriefing, 1800)
   startSyncEvents()
@@ -1116,6 +1316,7 @@ app.on('before-quit', () => {
   isQuitting = true
   clearInterval(reminderCheckTimer)
   clearInterval(dailyBriefingCheckTimer)
+  clearTimeout(dailyBriefingScheduleTimer)
   clearTimeout(saveBoundsTimer)
   saveReminderBounds()
   stopSyncEvents()

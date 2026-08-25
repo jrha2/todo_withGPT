@@ -24,6 +24,9 @@ if (-not $env:TODO_DATABASE_PATH) {
 if (-not $env:TODO_UPLOADS_PATH) {
   $env:TODO_UPLOADS_PATH = Join-Path $PSScriptRoot 'uploads'
 }
+if (-not $env:TODO_UPDATES_PATH) {
+  $env:TODO_UPDATES_PATH = Join-Path $PSScriptRoot 'updates'
+}
 
 $node = (Get-Command node -ErrorAction Stop).Source
 Set-Location -LiteralPath $PSScriptRoot

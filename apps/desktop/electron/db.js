@@ -17,6 +17,15 @@ const DEFAULT_ADMIN_LOGIN_ID = process.env.TODO_ADMIN_LOGIN_ID || 'admin'
 const DEFAULT_ADMIN_PASSWORD = process.env.TODO_ADMIN_PASSWORD || 'Admin1234!'
 const PASSWORD_ITERATIONS = 210000
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
 function hashPassword(password) {
   const normalized = String(password ?? '')
 
@@ -153,7 +162,9 @@ export function initializeDb() {
       owner_user_id TEXT NOT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      deleted_at DATETIME NULL
+      deleted_at DATETIME NULL,
+      FOREIGN KEY (parent_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS task_details (
@@ -168,7 +179,10 @@ export function initializeDb() {
       memo_updated_at DATETIME NULL,
       completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (nav_node_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
+      FOREIGN KEY (assignee_user_id) REFERENCES users(id),
+      FOREIGN KEY (memo_author_user_id) REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS task_assignees (
@@ -198,8 +212,36 @@ export function initializeDb() {
     CREATE INDEX IF NOT EXISTS idx_sub_tasks_task_order
       ON sub_tasks(task_detail_id, order_index);
 
+    CREATE TABLE IF NOT EXISTS sub_task_assignees (
+      sub_task_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (sub_task_id, user_id),
+      FOREIGN KEY (sub_task_id) REFERENCES sub_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sub_task_assignees_user
+      ON sub_task_assignees(user_id, sub_task_id);
+
     CREATE INDEX IF NOT EXISTS idx_task_assignees_user
       ON task_assignees(user_id, task_detail_id);
+
+    CREATE TABLE IF NOT EXISTS memos (
+      id TEXT PRIMARY KEY,
+      task_detail_id TEXT NOT NULL,
+      content_html TEXT NOT NULL DEFAULT '',
+      author_user_id TEXT NOT NULL,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (task_detail_id) REFERENCES task_details(id) ON DELETE CASCADE,
+      FOREIGN KEY (author_user_id) REFERENCES users(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memos_task_order
+      ON memos(task_detail_id, order_index, created_at);
 
     CREATE TABLE IF NOT EXISTS comments (
       id TEXT PRIMARY KEY,
@@ -283,14 +325,35 @@ export function initializeDb() {
       FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE INDEX IF NOT EXISTS idx_nav_nodes_parent_order
+      ON nav_nodes(parent_id, order_index);
+
+    CREATE INDEX IF NOT EXISTS idx_nav_nodes_owner_user
+      ON nav_nodes(owner_user_id);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_task_details_nav_node
+      ON task_details(nav_node_id);
+
+    CREATE INDEX IF NOT EXISTS idx_task_details_assignee
+      ON task_details(assignee_user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_sub_tasks_assignee
+      ON sub_tasks(assignee_user_id);
+
     CREATE INDEX IF NOT EXISTS idx_comments_task_parent_created
       ON comments(task_detail_id, parent_comment_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_comments_author
+      ON comments(author_user_id);
 
     CREATE INDEX IF NOT EXISTS idx_attachments_task
       ON attachments(task_detail_id);
 
     CREATE INDEX IF NOT EXISTS idx_reminders_task
       ON reminders(task_detail_id);
+
+    CREATE INDEX IF NOT EXISTS idx_reminders_remind_status
+      ON reminders(remind_at, status);
 
     CREATE INDEX IF NOT EXISTS idx_reminder_user_states_user
       ON reminder_user_states(user_id, status, snoozed_until);
@@ -471,6 +534,54 @@ export function initializeDb() {
     WHERE assignee_user_id IS NOT NULL;
   `)
 
+  db.exec(`
+    INSERT OR IGNORE INTO sub_task_assignees (sub_task_id, user_id, order_index)
+    SELECT id, assignee_user_id, 0
+    FROM sub_tasks
+    WHERE assignee_user_id IS NOT NULL;
+  `)
+
+  const legacyMemoRows = db.prepare(`
+    SELECT
+      task_detail.id AS taskDetailId,
+      task_detail.memo_content AS content,
+      COALESCE(
+        task_detail.memo_author_user_id,
+        nav_node.owner_user_id,
+        'user-admin'
+      ) AS authorUserId,
+      COALESCE(task_detail.memo_updated_at, task_detail.updated_at) AS updatedAt
+    FROM task_details AS task_detail
+    JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+    WHERE
+      task_detail.memo_content <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM memos AS memo
+        WHERE memo.task_detail_id = task_detail.id
+      )
+  `).all()
+  const insertLegacyMemo = db.prepare(`
+    INSERT INTO memos (
+      id, task_detail_id, content_html, author_user_id,
+      order_index, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+  `)
+  legacyMemoRows.forEach((memo) => {
+    const contentHtml = escapeHtml(memo.content).replace(/\r?\n/g, '<br>')
+    insertLegacyMemo.run(
+      `memo-${randomUUID()}`,
+      memo.taskDetailId,
+      contentHtml,
+      memo.authorUserId,
+      memo.updatedAt,
+      memo.updatedAt,
+    )
+  })
+
+  db.prepare(`SELECT id FROM task_details`).all().forEach((taskDetail) => {
+    syncLegacyMemoForTask(db, taskDetail.id)
+  })
+
   db.prepare(`
     INSERT INTO reminders (
       id, task_detail_id, remind_at, notify_desktop, notify_email,
@@ -592,6 +703,7 @@ export function getManagedUsers() {
       is_active AS isActive,
       created_at AS createdAt
     FROM users
+    WHERE login_id IS NOT NULL
     ORDER BY
       CASE role WHEN 'admin' THEN 0 ELSE 1 END,
       name COLLATE NOCASE,
@@ -720,9 +832,12 @@ export function deleteManagedUser(actorUserId, userId) {
     assignedTasks: db.prepare(`SELECT COUNT(*) AS count FROM task_assignees WHERE user_id = ?`).get(userId).count,
     legacyAssignedTasks: db.prepare(`SELECT COUNT(*) AS count FROM task_details WHERE assignee_user_id = ?`).get(userId).count,
     assignedSubTasks: db.prepare(`SELECT COUNT(*) AS count FROM sub_tasks WHERE assignee_user_id = ?`).get(userId).count,
+    assignedSubTaskLinks: db.prepare(`SELECT COUNT(*) AS count FROM sub_task_assignees WHERE user_id = ?`).get(userId).count,
     comments: db.prepare(`SELECT COUNT(*) AS count FROM comments WHERE author_user_id = ?`).get(userId).count,
     attachments: db.prepare(`SELECT COUNT(*) AS count FROM attachments WHERE uploaded_by_user_id = ?`).get(userId).count,
-    memos: db.prepare(`SELECT COUNT(*) AS count FROM task_details WHERE memo_author_user_id = ?`).get(userId).count,
+    memos:
+      db.prepare(`SELECT COUNT(*) AS count FROM memos WHERE author_user_id = ?`).get(userId).count +
+      db.prepare(`SELECT COUNT(*) AS count FROM task_details WHERE memo_author_user_id = ?`).get(userId).count,
     reminderStates: db.prepare(`SELECT COUNT(*) AS count FROM reminder_user_states WHERE user_id = ?`).get(userId).count,
     activityLogs: db.prepare(`SELECT COUNT(*) AS count FROM activity_logs WHERE actor_user_id = ?`).get(userId).count,
   }
@@ -736,6 +851,92 @@ export function deleteManagedUser(actorUserId, userId) {
 
   db.prepare(`DELETE FROM users WHERE id = ?`).run(userId)
   return { id: userId }
+}
+
+export function getManagedUserReferences(userId) {
+  const db = getDb()
+  const user = getUserAccountRow(userId)
+  if (!user) throw new Error('USER_NOT_FOUND')
+
+  const taskRows = db.prepare(`
+    SELECT DISTINCT taskId, taskTitle, relation FROM (
+      SELECT nav_node.id AS taskId, nav_node.title AS taskTitle, '업무 작성자' AS relation
+      FROM nav_nodes AS nav_node
+      WHERE nav_node.owner_user_id = ? AND nav_node.node_type = 'task'
+        AND nav_node.deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT nav_node.id, nav_node.title, 'Task 담당자'
+      FROM task_assignees AS link
+      JOIN task_details AS detail ON detail.id = link.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+      WHERE link.user_id = ? AND nav_node.deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT nav_node.id, nav_node.title, 'Sub Task 담당자'
+      FROM sub_task_assignees AS link
+      JOIN sub_tasks AS sub_task ON sub_task.id = link.sub_task_id
+      JOIN task_details AS detail ON detail.id = sub_task.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+      WHERE link.user_id = ? AND nav_node.deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT nav_node.id, nav_node.title, '댓글 작성자'
+      FROM comments AS comment
+      JOIN task_details AS detail ON detail.id = comment.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+      WHERE comment.author_user_id = ? AND nav_node.deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT nav_node.id, nav_node.title, '메모 작성자'
+      FROM memos AS memo
+      JOIN task_details AS detail ON detail.id = memo.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+      WHERE memo.author_user_id = ? AND nav_node.deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT nav_node.id, nav_node.title, '첨부파일 등록자'
+      FROM attachments AS attachment
+      JOIN task_details AS detail ON detail.id = attachment.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+      WHERE attachment.uploaded_by_user_id = ? AND nav_node.deleted_at IS NULL
+    )
+    ORDER BY taskTitle COLLATE NOCASE, relation
+  `).all(userId, userId, userId, userId, userId, userId)
+
+  const taskMap = new Map()
+  taskRows.forEach((row) => {
+    const item = taskMap.get(row.taskId) || {
+      taskId: row.taskId,
+      title: row.taskTitle,
+      relations: [],
+    }
+    if (!item.relations.includes(row.relation)) item.relations.push(row.relation)
+    taskMap.set(row.taskId, item)
+  })
+
+  const folders = db.prepare(`
+    SELECT id, title
+    FROM nav_nodes
+    WHERE owner_user_id = ? AND node_type = 'folder' AND deleted_at IS NULL
+    ORDER BY title COLLATE NOCASE
+  `).all(userId)
+  const activityCount = db.prepare(`
+    SELECT COUNT(*) AS count FROM activity_logs WHERE actor_user_id = ?
+  `).get(userId).count
+
+  return {
+    user: toPublicUser(user),
+    tasks: Array.from(taskMap.values()),
+    folders,
+    activityCount,
+    hasRelatedData: taskMap.size > 0 || folders.length > 0 || activityCount > 0,
+  }
 }
 
 export function getNavigationTree() {
@@ -994,7 +1195,7 @@ export function getAssigneeUsers() {
   return db.prepare(`
     SELECT id, name, email
     FROM users
-    WHERE is_active = 1
+    WHERE is_active = 1 AND login_id IS NOT NULL
     ORDER BY name COLLATE NOCASE, created_at, id
   `).all()
 }
@@ -1253,6 +1454,45 @@ export function updateTaskDetail(taskId, changes) {
   return update()
 }
 
+function getSubTaskAssignees(db, subTaskId) {
+  return db.prepare(`
+    SELECT user.id, user.name, user.email
+    FROM sub_task_assignees AS link
+    JOIN users AS user ON user.id = link.user_id
+    WHERE link.sub_task_id = ?
+    ORDER BY link.order_index, link.created_at, user.id
+  `).all(subTaskId)
+}
+
+function replaceSubTaskAssignees(db, subTaskId, assigneeIds) {
+  const uniqueIds = Array.from(new Set(
+    (Array.isArray(assigneeIds) ? assigneeIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean),
+  ))
+  const validUsers = uniqueIds.map((userId) => {
+    const user = db.prepare(`
+      SELECT id, name, email FROM users
+      WHERE id = ? AND is_active = 1
+    `).get(userId)
+    if (!user) throw new Error(`Assignee user not found: ${userId}`)
+    return user
+  })
+
+  db.prepare(`DELETE FROM sub_task_assignees WHERE sub_task_id = ?`).run(subTaskId)
+  const insert = db.prepare(`
+    INSERT INTO sub_task_assignees (sub_task_id, user_id, order_index)
+    VALUES (?, ?, ?)
+  `)
+  validUsers.forEach((user, index) => insert.run(subTaskId, user.id, index))
+  db.prepare(`
+    UPDATE sub_tasks
+    SET assignee_user_id = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(validUsers[0]?.id ?? null, subTaskId)
+  return validUsers
+}
+
 function getSubTaskById(db, subTaskId) {
   const row = db.prepare(`
     SELECT
@@ -1273,8 +1513,12 @@ function getSubTaskById(db, subTaskId) {
     throw new Error(`Sub Task not found: ${subTaskId}`)
   }
 
+  const assignees = getSubTaskAssignees(db, subTaskId)
   return {
     ...row,
+    assigneeId: assignees[0]?.id ?? '',
+    assignee: getAssigneeDisplay(assignees),
+    assignees,
     completed: Boolean(row.completed),
   }
 }
@@ -1297,32 +1541,157 @@ export function getSubTasks(taskId) {
     LEFT JOIN users AS assignee
       ON assignee.id = sub_task.assignee_user_id
     WHERE task_detail.nav_node_id = ?
-    ORDER BY
-      CASE
-        WHEN sub_task.due_date IS NULL OR sub_task.due_date = '' THEN 1
-        ELSE 0
-      END,
-      sub_task.due_date,
-      sub_task.created_at,
-      sub_task.order_index,
-      sub_task.id
+    ORDER BY sub_task.order_index, sub_task.created_at, sub_task.id
   `).all(taskId)
 
-  return rows.map((row) => ({
-    ...row,
-    completed: Boolean(row.completed),
-  }))
+  return rows.map((row) => {
+    const assignees = getSubTaskAssignees(db, row.id)
+    return {
+      ...row,
+      assigneeId: assignees[0]?.id ?? '',
+      assignee: getAssigneeDisplay(assignees),
+      assignees,
+      completed: Boolean(row.completed),
+    }
+  })
+}
+
+export function reorderSubTasks(taskId, orderedIds) {
+  const db = getDb()
+  const requestedIds = Array.isArray(orderedIds)
+    ? orderedIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : []
+
+  const reorder = db.transaction(() => {
+    const taskDetail = db.prepare(`
+      SELECT id
+      FROM task_details
+      WHERE nav_node_id = ?
+    `).get(taskId)
+
+    if (!taskDetail) {
+      throw new Error(`Task detail not found: ${taskId}`)
+    }
+
+    const existingIds = db.prepare(`
+      SELECT id
+      FROM sub_tasks
+      WHERE task_detail_id = ?
+      ORDER BY order_index, created_at, id
+    `).all(taskDetail.id).map((row) => row.id)
+
+    if (
+      requestedIds.length !== existingIds.length ||
+      new Set(requestedIds).size !== requestedIds.length ||
+      existingIds.some((id) => !requestedIds.includes(id))
+    ) {
+      throw new Error('Sub Task order must include every item exactly once')
+    }
+
+    const updateOrder = db.prepare(`
+      UPDATE sub_tasks
+      SET order_index = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND task_detail_id = ?
+    `)
+    requestedIds.forEach((subTaskId, index) => {
+      updateOrder.run(index + 1, subTaskId, taskDetail.id)
+    })
+
+    return getSubTasks(taskId)
+  })
+
+  return reorder()
+}
+
+function memoHtmlToPlainText(contentHtml) {
+  return String(contentHtml ?? '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<li(?:\s[^>]*)?>/gi, '- ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function syncLegacyMemoForTask(db, taskDetailId) {
+  const firstMemo = db.prepare(`
+    SELECT
+      content_html AS contentHtml,
+      author_user_id AS authorUserId,
+      updated_at AS updatedAt
+    FROM memos
+    WHERE task_detail_id = ?
+    ORDER BY order_index, created_at, id
+    LIMIT 1
+  `).get(taskDetailId)
+
+  if (firstMemo) {
+    const legacyContent = memoHtmlToPlainText(firstMemo.contentHtml)
+    db.prepare(`
+      UPDATE task_details
+      SET
+        memo_content = ?,
+        memo_author_user_id = ?,
+        memo_updated_at = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND (
+          memo_content IS NOT ?
+          OR memo_author_user_id IS NOT ?
+          OR memo_updated_at IS NOT ?
+        )
+    `).run(
+      legacyContent,
+      firstMemo.authorUserId,
+      firstMemo.updatedAt,
+      taskDetailId,
+      legacyContent,
+      firstMemo.authorUserId,
+      firstMemo.updatedAt,
+    )
+    return
+  }
+
+  db.prepare(`
+    UPDATE task_details
+    SET
+      memo_content = '',
+      memo_author_user_id = NULL,
+      memo_updated_at = NULL,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+      AND (
+        memo_content <> ''
+        OR memo_author_user_id IS NOT NULL
+        OR memo_updated_at IS NOT NULL
+      )
+  `).run(taskDetailId)
 }
 
 export function getMemo(taskId) {
   const db = getDb()
   const row = db.prepare(`
     SELECT
-      task_detail.memo_content AS content,
+      memo.content_html AS contentHtml,
       COALESCE(author.name, '') AS author,
-      COALESCE(task_detail.memo_updated_at, '') AS updatedAt
+      COALESCE(memo.updated_at, '') AS updatedAt
     FROM task_details AS task_detail
-    LEFT JOIN users AS author ON author.id = task_detail.memo_author_user_id
+    LEFT JOIN memos AS memo ON memo.id = (
+      SELECT candidate.id
+      FROM memos AS candidate
+      WHERE candidate.task_detail_id = task_detail.id
+      ORDER BY candidate.order_index, candidate.created_at, candidate.id
+      LIMIT 1
+    )
+    LEFT JOIN users AS author ON author.id = memo.author_user_id
     WHERE task_detail.nav_node_id = ?
   `).get(taskId)
 
@@ -1331,7 +1700,7 @@ export function getMemo(taskId) {
   }
 
   return {
-    content: row.content ?? '',
+    content: memoHtmlToPlainText(row.contentHtml),
     author: row.author ?? '',
     updatedAt: row.updatedAt ?? '',
   }
@@ -1340,21 +1709,160 @@ export function getMemo(taskId) {
 export function saveMemo(taskId, memo, authorUserId) {
   const db = getDb()
   const nextMemo = String(memo ?? '')
-  const result = db.prepare(`
-    UPDATE task_details
-    SET
-      memo_content = ?,
-      memo_author_user_id = ?,
-      memo_updated_at = CURRENT_TIMESTAMP,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE nav_node_id = ?
-  `).run(nextMemo, authorUserId, taskId)
+  const nextContentHtml = escapeHtml(nextMemo).replace(/\r?\n/g, '<br>')
+  const save = db.transaction(() => {
+    const taskDetail = db.prepare(`
+      SELECT id FROM task_details WHERE nav_node_id = ?
+    `).get(taskId)
+    if (!taskDetail) throw new Error(`Task detail not found: ${taskId}`)
 
-  if (result.changes === 0) {
-    throw new Error(`Task detail not found: ${taskId}`)
-  }
+    const firstMemo = db.prepare(`
+      SELECT id FROM memos
+      WHERE task_detail_id = ?
+      ORDER BY order_index, created_at, id
+      LIMIT 1
+    `).get(taskDetail.id)
+
+    if (firstMemo && nextMemo) {
+      db.prepare(`
+        UPDATE memos
+        SET content_html = ?, author_user_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(nextContentHtml, authorUserId, firstMemo.id)
+    } else if (firstMemo) {
+      db.prepare(`DELETE FROM memos WHERE id = ?`).run(firstMemo.id)
+    } else if (nextMemo) {
+      db.prepare(`
+        INSERT INTO memos (
+          id, task_detail_id, content_html, author_user_id, order_index
+        ) VALUES (?, ?, ?, ?, 1)
+      `).run(`memo-${randomUUID()}`, taskDetail.id, nextContentHtml, authorUserId)
+    }
+
+    syncLegacyMemoForTask(db, taskDetail.id)
+  })
+  save()
 
   return getMemo(taskId)
+}
+
+function getMemoById(db, memoId) {
+  const memo = db.prepare(`
+    SELECT
+      memo.id,
+      memo.content_html AS contentHtml,
+      author.name AS author,
+      memo.author_user_id AS authorUserId,
+      memo.created_at AS createdAt,
+      memo.updated_at AS updatedAt,
+      memo.order_index AS "order"
+    FROM memos AS memo
+    JOIN users AS author ON author.id = memo.author_user_id
+    WHERE memo.id = ?
+  `).get(memoId)
+  if (!memo) throw new Error(`Memo not found: ${memoId}`)
+  return memo
+}
+
+export function getMemos(taskId) {
+  const db = getDb()
+  return db.prepare(`
+    SELECT
+      memo.id,
+      memo.content_html AS contentHtml,
+      author.name AS author,
+      memo.author_user_id AS authorUserId,
+      memo.created_at AS createdAt,
+      memo.updated_at AS updatedAt,
+      memo.order_index AS "order"
+    FROM task_details AS task_detail
+    JOIN memos AS memo ON memo.task_detail_id = task_detail.id
+    JOIN users AS author ON author.id = memo.author_user_id
+    WHERE task_detail.nav_node_id = ?
+    ORDER BY memo.order_index, memo.created_at, memo.id
+  `).all(taskId)
+}
+
+export function createMemo(taskId, contentHtml, authorUserId) {
+  const db = getDb()
+  const nextContent = String(contentHtml ?? '').trim()
+  if (!nextContent) throw new Error('Memo content is required')
+
+  const create = db.transaction(() => {
+    const taskDetail = db.prepare(`
+      SELECT id FROM task_details WHERE nav_node_id = ?
+    `).get(taskId)
+    if (!taskDetail) throw new Error(`Task detail not found: ${taskId}`)
+    const sibling = db.prepare(`
+      SELECT COALESCE(MAX(order_index), 0) AS maxOrder
+      FROM memos WHERE task_detail_id = ?
+    `).get(taskDetail.id)
+    const memoId = `memo-${randomUUID()}`
+    db.prepare(`
+      INSERT INTO memos (
+        id, task_detail_id, content_html, author_user_id, order_index
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(
+      memoId,
+      taskDetail.id,
+      nextContent,
+      authorUserId,
+      sibling.maxOrder + 1,
+    )
+    syncLegacyMemoForTask(db, taskDetail.id)
+    return getMemoById(db, memoId)
+  })
+  return create()
+}
+
+export function updateMemo(memoId, contentHtml, authorUserId) {
+  const db = getDb()
+  const nextContent = String(contentHtml ?? '').trim()
+  if (!nextContent) throw new Error('Memo content is required')
+
+  const update = db.transaction(() => {
+    const memo = db.prepare(`
+      SELECT task_detail_id AS taskDetailId
+      FROM memos
+      WHERE id = ?
+    `).get(memoId)
+    if (!memo) throw new Error(`Memo not found: ${memoId}`)
+
+    db.prepare(`
+      UPDATE memos
+      SET
+        content_html = ?,
+        author_user_id = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(nextContent, authorUserId, memoId)
+    syncLegacyMemoForTask(db, memo.taskDetailId)
+    return getMemoById(db, memoId)
+  })
+
+  return update()
+}
+
+export function deleteMemo(memoId) {
+  const db = getDb()
+  const remove = db.transaction(() => {
+    const memo = db.prepare(`
+      SELECT
+        task_detail.id AS taskDetailId,
+        task_detail.nav_node_id AS taskId
+      FROM memos AS memo
+      JOIN task_details AS task_detail ON task_detail.id = memo.task_detail_id
+      WHERE memo.id = ?
+    `).get(memoId)
+    if (!memo) throw new Error(`Memo not found: ${memoId}`)
+
+    const result = db.prepare(`DELETE FROM memos WHERE id = ?`).run(memoId)
+    if (result.changes === 0) throw new Error(`Memo not found: ${memoId}`)
+    syncLegacyMemoForTask(db, memo.taskDetailId)
+    return { id: memoId, taskId: memo.taskId }
+  })
+
+  return remove()
 }
 
 function getCommentById(db, commentId) {
@@ -1571,9 +2079,23 @@ export function createSubTask(taskId, title) {
 
   const create = db.transaction(() => {
     const taskDetail = db.prepare(`
-      SELECT id, due_date AS dueDate
-      FROM task_details
-      WHERE nav_node_id = ?
+      SELECT
+        task_detail.id,
+        COALESCE(
+          (
+            SELECT task_assignee.user_id
+            FROM task_assignees AS task_assignee
+            WHERE task_assignee.task_detail_id = task_detail.id
+            ORDER BY
+              task_assignee.order_index,
+              task_assignee.created_at,
+              task_assignee.user_id
+            LIMIT 1
+          ),
+          task_detail.assignee_user_id
+        ) AS defaultAssigneeId
+      FROM task_details AS task_detail
+      WHERE task_detail.nav_node_id = ?
     `).get(taskId)
 
     if (!taskDetail) {
@@ -1601,10 +2123,18 @@ export function createSubTask(taskId, title) {
       subTaskId,
       taskDetail.id,
       nextTitle,
-      taskDetail.dueDate,
       null,
+      taskDetail.defaultAssigneeId ?? null,
       sibling.maxOrder + 1,
     )
+
+    const inheritedAssignees = db.prepare(`
+      SELECT user_id AS userId
+      FROM task_assignees
+      WHERE task_detail_id = ?
+      ORDER BY order_index, created_at, user_id
+    `).all(taskDetail.id).map((row) => row.userId)
+    replaceSubTaskAssignees(db, subTaskId, inheritedAssignees)
 
     return getSubTaskById(db, subTaskId)
   })
@@ -1642,9 +2172,9 @@ export function deleteSubTask(subTaskId) {
 
 export function updateSubTask(subTaskId, field, value) {
   const db = getDb()
-  const nextValue = String(value ?? '').trim()
+  const nextValue = Array.isArray(value) ? '' : String(value ?? '').trim()
 
-  if (!nextValue && field !== 'assignee') {
+  if (!nextValue && field === 'title') {
     throw new Error('Sub Task value is required')
   }
 
@@ -1663,11 +2193,18 @@ export function updateSubTask(subTaskId, field, value) {
       UPDATE sub_tasks
       SET due_date = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(nextValue, subTaskId)
+    `).run(nextValue || null, subTaskId)
 
     if (result.changes === 0) {
       throw new Error(`Sub Task not found: ${subTaskId}`)
     }
+  } else if (field === 'assignees') {
+    const updateAssignees = db.transaction(() => {
+      const exists = db.prepare(`SELECT id FROM sub_tasks WHERE id = ?`).get(subTaskId)
+      if (!exists) throw new Error(`Sub Task not found: ${subTaskId}`)
+      replaceSubTaskAssignees(db, subTaskId, value)
+    })
+    updateAssignees()
   } else if (field === 'assignee') {
     const updateAssignee = db.transaction(() => {
       if (!nextValue) {
@@ -1680,6 +2217,7 @@ export function updateSubTask(subTaskId, field, value) {
         if (result.changes === 0) {
           throw new Error(`Sub Task not found: ${subTaskId}`)
         }
+        db.prepare(`DELETE FROM sub_task_assignees WHERE sub_task_id = ?`).run(subTaskId)
         return
       }
 
@@ -1709,6 +2247,7 @@ export function updateSubTask(subTaskId, field, value) {
       if (result.changes === 0) {
         throw new Error(`Sub Task not found: ${subTaskId}`)
       }
+      replaceSubTaskAssignees(db, subTaskId, [user.id])
     })
 
     updateAssignee()
@@ -1984,6 +2523,7 @@ export function copyNavigationNode(nodeId, targetFolderId = null) {
     `)
     const getSourceSubTasks = db.prepare(`
       SELECT
+        id,
         title,
         due_date AS dueDate,
         assignee_user_id AS assigneeUserId,
@@ -2002,6 +2542,38 @@ export function copyNavigationNode(nodeId, targetFolderId = null) {
         assignee_user_id,
         completed,
         order_index
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    const getSourceSubTaskAssignees = db.prepare(`
+      SELECT user_id AS userId, order_index AS "order"
+      FROM sub_task_assignees
+      WHERE sub_task_id = ?
+      ORDER BY order_index, created_at, user_id
+    `)
+    const insertCopiedSubTaskAssignee = db.prepare(`
+      INSERT INTO sub_task_assignees (sub_task_id, user_id, order_index)
+      VALUES (?, ?, ?)
+    `)
+    const getSourceMemos = db.prepare(`
+      SELECT
+        content_html AS contentHtml,
+        author_user_id AS authorUserId,
+        order_index AS "order",
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM memos
+      WHERE task_detail_id = ?
+      ORDER BY order_index, created_at, id
+    `)
+    const insertCopiedMemo = db.prepare(`
+      INSERT INTO memos (
+        id,
+        task_detail_id,
+        content_html,
+        author_user_id,
+        order_index,
+        created_at,
+        updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
     const getSourceComments = db.prepare(`
@@ -2157,14 +2729,34 @@ export function copyNavigationNode(nodeId, targetFolderId = null) {
 
           const sourceSubTasks = getSourceSubTasks.all(sourceDetail.id)
           sourceSubTasks.forEach((sourceSubTask) => {
+            const copiedSubTaskId = `subtask-${randomUUID()}`
             insertCopiedSubTask.run(
-              `subtask-${randomUUID()}`,
+              copiedSubTaskId,
               copiedDetailId,
               sourceSubTask.title,
               sourceSubTask.dueDate,
               sourceSubTask.assigneeUserId,
               sourceSubTask.completed,
               sourceSubTask.order,
+            )
+            getSourceSubTaskAssignees.all(sourceSubTask.id).forEach((assignee) => {
+              insertCopiedSubTaskAssignee.run(
+                copiedSubTaskId,
+                assignee.userId,
+                assignee.order,
+              )
+            })
+          })
+
+          getSourceMemos.all(sourceDetail.id).forEach((sourceMemo) => {
+            insertCopiedMemo.run(
+              `memo-${randomUUID()}`,
+              copiedDetailId,
+              sourceMemo.contentHtml,
+              sourceMemo.authorUserId,
+              sourceMemo.order,
+              sourceMemo.createdAt,
+              sourceMemo.updatedAt,
             )
           })
 
@@ -2451,7 +3043,7 @@ export function recordActivity(input) {
   )
 }
 
-export function getBriefingData(days = 7) {
+export function getBriefingData(days = 7, userId = '') {
   const db = getDb()
   const rangeDays = Math.min(31, Math.max(1, Number(days) || 7))
   let changes = db.prepare(`
@@ -2577,11 +3169,19 @@ export function getBriefingData(days = 7) {
         nav_node.title,
         COALESCE(sub_task.due_date, ''),
         sub_task.completed,
-        COALESCE(assignee.name, '')
+        COALESCE((
+          SELECT GROUP_CONCAT(assignee_name.name, ', ')
+          FROM (
+            SELECT user.name
+            FROM sub_task_assignees AS link
+            JOIN users AS user ON user.id = link.user_id
+            WHERE link.sub_task_id = sub_task.id
+            ORDER BY link.order_index, link.created_at, user.id
+          ) AS assignee_name
+        ), '')
       FROM sub_tasks AS sub_task
       JOIN task_details AS task_detail ON task_detail.id = sub_task.task_detail_id
       JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
-      LEFT JOIN users AS assignee ON assignee.id = sub_task.assignee_user_id
       WHERE nav_node.deleted_at IS NULL
         AND sub_task.due_date IS NOT NULL
         AND date(sub_task.due_date) BETWEEN date('now', 'localtime', '-' || ? || ' days')
@@ -2593,10 +3193,36 @@ export function getBriefingData(days = 7) {
     completed: Boolean(item.completed),
   }))
 
+  const belongsToUser = db.prepare(`
+    SELECT 1 AS matched
+    FROM nav_nodes AS nav_node
+    JOIN task_details AS task_detail ON task_detail.nav_node_id = nav_node.id
+    WHERE nav_node.id = ? AND (
+      nav_node.owner_user_id = ?
+      OR EXISTS (
+        SELECT 1 FROM task_assignees
+        WHERE task_detail_id = task_detail.id AND user_id = ?
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM sub_tasks AS sub_task
+        JOIN sub_task_assignees AS link ON link.sub_task_id = sub_task.id
+        WHERE sub_task.task_detail_id = task_detail.id AND link.user_id = ?
+      )
+    )
+    LIMIT 1
+  `)
+  const markMine = (item) => ({
+    ...item,
+    isMine: Boolean(
+      userId && item.taskId && belongsToUser.get(item.taskId, userId, userId, userId),
+    ),
+  })
+
   return {
     generatedAt: new Date().toISOString(),
     days: rangeDays,
-    changes,
-    dueItems,
+    changes: changes.map(markMine),
+    dueItems: dueItems.map(markMine),
   }
 }

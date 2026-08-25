@@ -90,37 +90,6 @@ INSERT INTO comments (
   ('comment-5', 'task-detail-2', 'comment-4', 'user-jh', 'VIP 대상자는 별도 시트로 분리 부탁드립니다.', 0),
   ('comment-6', 'task-detail-2', NULL, 'user-jh', 'VIP 대상자는 별도 시트로 분리해 주세요.', 0);
 
-INSERT INTO attachments (
-  id, task_detail_id, original_name, stored_path, mime_type, file_size, uploaded_by_user_id
-) VALUES
-  (
-    'attachment-1',
-    'task-detail-1',
-    'naming-ceremony-plan.xlsx',
-    '/uploads/naming-ceremony-plan.xlsx',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    24576,
-    'user-jh'
-  ),
-  (
-    'attachment-2',
-    'task-detail-1',
-    'participants_draft.docx',
-    '/uploads/participants_draft.docx',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    18432,
-    'user-jh'
-  ),
-  (
-    'attachment-3',
-    'task-detail-2',
-    'guest-list-draft.xlsx',
-    '/uploads/guest-list-draft.xlsx',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    15360,
-    'user-ps'
-  );
-
 INSERT INTO reminders (
   id, task_detail_id, remind_at, notify_desktop, notify_email, notify_mobile, status
 ) VALUES

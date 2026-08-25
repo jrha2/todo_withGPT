@@ -1,326 +1,146 @@
-import { useState } from 'react'
+import { useState, type DragEvent } from 'react'
+import { DateCalendar } from '../../task/components/TaskHeader'
 
-type SubTask = {
-  id: string
-  title: string
-  dueDate: string
-  assigneeId: string
-  assignee: string
-  completed: boolean
-  createdAt: string
-  creationOrder: number
-}
-
+type Assignee = { id: string; name: string; email: string }
+type SubTask = { id: string; title: string; dueDate: string; assigneeId: string; assignee: string; assignees: Assignee[]; completed: boolean; createdAt: string; creationOrder: number }
 type SubTaskSectionProps = {
   subTasks: SubTask[]
-  taskAssignees: Array<{ id: string; name: string; email: string }>
+  taskAssignees: Assignee[]
   onToggleSubTask: (subTaskId: string) => void
   onAddSubTask: (title: string) => void
   onDeleteSubTask: (subTaskId: string) => void
-  onUpdateSubTask: (
-    subTaskId: string,
-    field: 'title' | 'dueDate' | 'assignee',
-    value: string,
-  ) => void
+  onSortByDueDate: () => void
+  onReorderSubTasks: (orderedIds: string[]) => void
+  onUpdateSubTask: (subTaskId: string, field: 'title' | 'dueDate' | 'assignee' | 'assignees', value: string | string[]) => Promise<void> | void
 }
 
-function SubTaskSection({
-  subTasks,
-  taskAssignees,
-  onToggleSubTask,
-  onAddSubTask,
-  onDeleteSubTask,
-  onUpdateSubTask,
-}: SubTaskSectionProps) {
+function parseDate(value: string) {
+  if (!value) return new Date()
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+function SubTaskSection({ subTasks, taskAssignees, onToggleSubTask, onAddSubTask, onDeleteSubTask, onSortByDueDate, onReorderSubTasks, onUpdateSubTask }: SubTaskSectionProps) {
   const [isAdding, setIsAdding] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-  const [editingField, setEditingField] = useState<{
-    subTaskId: string
-    field: 'title' | 'dueDate' | 'assignee'
-  } | null>(null)
-  const [editingValue, setEditingValue] = useState('')
-  const completedCount = subTasks.filter((subTask) => subTask.completed).length
-  const progress = subTasks.length === 0
-    ? 0
-    : Math.round((completedCount / subTasks.length) * 100)
+  const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const [dueTargetId, setDueTargetId] = useState<string | null>(null)
+  const [dueDateDraft, setDueDateDraft] = useState('')
+  const [calendarCursor, setCalendarCursor] = useState(new Date())
+  const [assigneeTargetId, setAssigneeTargetId] = useState<string | null>(null)
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([])
+  const [isSaving, setIsSaving] = useState(false)
+  const [editorError, setEditorError] = useState('')
+  const [draggedSubTaskId, setDraggedSubTaskId] = useState<string | null>(null)
+  const [dropTargetSubTaskId, setDropTargetSubTaskId] = useState<string | null>(null)
+  const completedCount = subTasks.filter((item) => item.completed).length
+  const progress = subTasks.length ? Math.round((completedCount / subTasks.length) * 100) : 0
+  const deleteTarget = subTasks.find((item) => item.id === deleteTargetId) ?? null
+  const dueTarget = subTasks.find((item) => item.id === dueTargetId) ?? null
+  const assigneeTarget = subTasks.find((item) => item.id === assigneeTargetId) ?? null
 
   const handleSubmit = () => {
-    const trimmedTitle = newTitle.trim()
-
-    if (!trimmedTitle) {
-      return
-    }
-
-    onAddSubTask(trimmedTitle)
+    const title = newTitle.trim()
+    if (!title) return
+    onAddSubTask(title)
     setNewTitle('')
     setIsAdding(false)
   }
-
-  const deleteTarget = subTasks.find((subTask) => subTask.id === deleteTargetId) ?? null
-
-  const startEditing = (
-    subTaskId: string,
-    field: 'title' | 'dueDate' | 'assignee',
-    currentValue: string,
-  ) => {
-    setEditingField({ subTaskId, field })
-    setEditingValue(currentValue)
+  const saveTitle = async () => {
+    const title = editingTitle.trim()
+    if (!editingTitleId || !title) return
+    await onUpdateSubTask(editingTitleId, 'title', title)
+    setEditingTitleId(null)
+    setEditingTitle('')
   }
-
-  const saveEditing = () => {
-    if (!editingField) {
-      return
-    }
-
-    const trimmed = editingValue.trim()
-
-    if (!trimmed && editingField.field !== 'assignee') {
-      return
-    }
-
-    onUpdateSubTask(editingField.subTaskId, editingField.field, trimmed)
-    setEditingField(null)
-    setEditingValue('')
+  const openDueEditor = (item: SubTask) => {
+    setDueTargetId(item.id)
+    setDueDateDraft(item.dueDate)
+    setCalendarCursor(parseDate(item.dueDate))
+    setEditorError('')
   }
-
-  const cancelEditing = () => {
-    setEditingField(null)
-    setEditingValue('')
+  const saveDueDate = async (value = dueDateDraft) => {
+    if (!dueTargetId) return
+    setIsSaving(true)
+    setEditorError('')
+    try {
+      await onUpdateSubTask(dueTargetId, 'dueDate', value)
+      setDueTargetId(null)
+    } catch (error) {
+      console.error('Failed to update Sub Task due date:', error)
+      setEditorError('기한을 저장하지 못했습니다.')
+    } finally { setIsSaving(false) }
+  }
+  const openAssigneeEditor = (item: SubTask) => {
+    setAssigneeTargetId(item.id)
+    setSelectedAssigneeIds(item.assignees.map((assignee) => assignee.id))
+    setEditorError('')
+  }
+  const saveAssignees = async () => {
+    if (!assigneeTargetId) return
+    setIsSaving(true)
+    setEditorError('')
+    try {
+      await onUpdateSubTask(assigneeTargetId, 'assignees', selectedAssigneeIds)
+      setAssigneeTargetId(null)
+    } catch (error) {
+      console.error('Failed to update Sub Task assignees:', error)
+      setEditorError('담당자를 저장하지 못했습니다.')
+    } finally { setIsSaving(false) }
+  }
+  const handleDragStart = (event: DragEvent<HTMLSpanElement>, id: string) => {
+    setDraggedSubTaskId(id)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', id)
+  }
+  const handleDrop = (event: DragEvent<HTMLDivElement>, targetId: string) => {
+    event.preventDefault()
+    const sourceId = draggedSubTaskId || event.dataTransfer.getData('text/plain')
+    setDraggedSubTaskId(null)
+    setDropTargetSubTaskId(null)
+    if (!sourceId || sourceId === targetId) return
+    const ids = subTasks.map((item) => item.id)
+    const sourceIndex = ids.indexOf(sourceId)
+    const targetIndex = ids.indexOf(targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    ids.splice(sourceIndex, 1)
+    ids.splice(targetIndex, 0, sourceId)
+    onReorderSubTasks(ids)
   }
 
   return (
     <section className="content-card subtask-card">
       <div className="section-header section-header-row">
-        <div>
-          <div className="section-eyebrow">CHECKLIST</div>
-          <h2>Sub Tasks <span>{completedCount}/{subTasks.length}</span></h2>
-        </div>
-        <div className="subtask-progress-wrap">
-          <span>{progress}%</span>
-          <div className="subtask-progress-track">
-            <div className="subtask-progress-bar" style={{ width: `${progress}%` }} />
-          </div>
-        </div>
+        <div><div className="section-eyebrow">CHECKLIST</div><h2>Sub Tasks <span>{completedCount}/{subTasks.length}</span></h2></div>
+        <div className="subtask-progress-wrap"><span>{progress}%</span><div className="subtask-progress-track"><div className="subtask-progress-bar" style={{ width: `${progress}%` }} /></div></div>
       </div>
-
+      <div className="subtask-list-toolbar"><button className="subtask-due-sort-button" type="button" onClick={onSortByDueDate} disabled={subTasks.length < 2}><span>⇅</span>기한 별 정렬하기</button></div>
       <div className="subtask-list">
-        {subTasks.map((subTask) => {
-          const isEditingDueDate =
-            editingField?.subTaskId === subTask.id && editingField.field === 'dueDate'
-          const isEditingAssignee =
-            editingField?.subTaskId === subTask.id && editingField.field === 'assignee'
-          const isEditingTitle =
-            editingField?.subTaskId === subTask.id && editingField.field === 'title'
-
-          return (
-            <div
-              className={`subtask-item ${subTask.completed ? 'is-completed' : ''}`}
-              key={subTask.id}
-            >
-              <div className="subtask-left">
-                <input
-                  type="checkbox"
-                  checked={subTask.completed}
-                  onChange={() => onToggleSubTask(subTask.id)}
-                />
-                {isEditingTitle ? (
-                  <input
-                    className="subtask-title-input"
-                    type="text"
-                    value={editingValue}
-                    onChange={(event) => setEditingValue(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') saveEditing()
-                      if (event.key === 'Escape') cancelEditing()
-                    }}
-                    autoFocus
-                  />
-                ) : (
-                  <button
-                    className="subtask-title-button"
-                    type="button"
-                    title="이름 수정"
-                    onClick={() =>
-                      startEditing(subTask.id, 'title', subTask.title)
-                    }
-                  >
-                    {subTask.title}
-                  </button>
-                )}
-              </div>
-
-              <div className="subtask-right">
-                <div className="subtask-edit-block">
-                  {!isEditingDueDate ? (
-                    <button
-                      className="subtask-chip-button due-date-chip"
-                      type="button"
-                      onClick={() =>
-                        startEditing(subTask.id, 'dueDate', subTask.dueDate)
-                      }
-                    >
-                      <span className="chip-label">기한</span>
-                      <span className="chip-value">{subTask.dueDate}</span>
-                    </button>
-                  ) : (
-                    <div className="subtask-pop-editor">
-                      <div className="subtask-pop-editor-title">기한 수정</div>
-                      <input
-                        className="subtask-pop-input"
-                        type="date"
-                        value={editingValue}
-                        onChange={(event) => setEditingValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') saveEditing()
-                          if (event.key === 'Escape') cancelEditing()
-                        }}
-                      />
-                      <div className="subtask-pop-actions">
-                        <button type="button" onClick={saveEditing}>
-                          저장
-                        </button>
-                        <button type="button" onClick={cancelEditing}>
-                          취소
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="subtask-edit-block">
-                  {!isEditingAssignee ? (
-                    <button
-                      className="subtask-chip-button assignee-chip-button"
-                      type="button"
-                      onClick={() =>
-                        startEditing(
-                          subTask.id,
-                          'assignee',
-                          subTask.assigneeId,
-                        )
-                      }
-                    >
-                      <span className="chip-label">담당자</span>
-                      <span className="chip-value">{subTask.assignee || '미지정'}</span>
-                    </button>
-                  ) : (
-                    <div className="subtask-pop-editor">
-                      <div className="subtask-pop-editor-title">담당자 수정</div>
-                      <select
-                        className="subtask-pop-input"
-                        value={editingValue}
-                        onChange={(event) => setEditingValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') saveEditing()
-                          if (event.key === 'Escape') cancelEditing()
-                        }}
-                        autoFocus
-                      >
-                        <option value="">담당자 없음</option>
-                        {taskAssignees.map((assignee) => (
-                          <option key={assignee.id} value={assignee.id}>
-                            {assignee.name}{assignee.email ? ` · ${assignee.email}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="subtask-pop-actions">
-                        <button type="button" onClick={saveEditing}>
-                          저장
-                        </button>
-                        <button type="button" onClick={cancelEditing}>
-                          취소
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  className="subtask-delete-button"
-                  type="button"
-                  onClick={() => setDeleteTargetId(subTask.id)}
-                >
-                  삭제
-                </button>
-              </div>
+        {subTasks.map((item) => (
+          <div className={`subtask-item ${item.completed ? 'is-completed' : ''}${draggedSubTaskId === item.id ? ' is-dragging' : ''}${dropTargetSubTaskId === item.id ? ' is-drop-target' : ''}`} key={item.id} onDragOver={(event) => { if (!draggedSubTaskId || draggedSubTaskId === item.id) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTargetSubTaskId(item.id) }} onDragLeave={() => setDropTargetSubTaskId((current) => current === item.id ? null : current)} onDrop={(event) => handleDrop(event, item.id)}>
+            <div className="subtask-left">
+              <span className="subtask-drag-handle" draggable role="button" tabIndex={0} title="드래그해서 순서 변경" onDragStart={(event) => handleDragStart(event, item.id)} onDragEnd={() => { setDraggedSubTaskId(null); setDropTargetSubTaskId(null) }}>⠿</span>
+              <input type="checkbox" checked={item.completed} onChange={() => onToggleSubTask(item.id)} />
+              {editingTitleId === item.id ? <input className="subtask-title-input" value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void saveTitle(); if (event.key === 'Escape') setEditingTitleId(null) }} autoFocus /> : <button className="subtask-title-button" type="button" onClick={() => { setEditingTitleId(item.id); setEditingTitle(item.title) }}>{item.title}</button>}
             </div>
-          )
-        })}
-        {subTasks.length === 0 && (
-          <div className="subtask-empty-state">
-            <div className="subtask-empty-icon">✓</div>
-            <div>
-              <strong>아직 Sub Task가 없습니다</strong>
-              <span>작업을 작은 단계로 나누면 진행하기 쉬워집니다.</span>
+            <div className="subtask-right">
+              <button className="subtask-chip-button due-date-chip" type="button" onClick={() => openDueEditor(item)}><span className="chip-label">기한</span><span className="chip-value">{item.dueDate || '없음'}</span></button>
+              <button className="subtask-chip-button assignee-chip-button" type="button" onClick={() => openAssigneeEditor(item)}><span className="chip-label">담당자</span><span className="chip-value">{item.assignee || '미지정'}</span></button>
+              <button className="subtask-delete-button" type="button" onClick={() => setDeleteTargetId(item.id)}>삭제</button>
             </div>
           </div>
-        )}
+        ))}
+        {subTasks.length === 0 && <div className="subtask-empty-state"><div className="subtask-empty-icon">✓</div><div><strong>아직 Sub Task가 없습니다</strong><span>작업을 작은 단계로 나누면 진행하기 쉬워집니다.</span></div></div>}
       </div>
+      <div className="add-subtask-row">{!isAdding ? <button type="button" onClick={() => setIsAdding(true)}><span>+</span> Sub Task 추가</button> : <div className="add-subtask-form"><input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') handleSubmit(); if (event.key === 'Escape') { setIsAdding(false); setNewTitle('') } }} placeholder="새 Sub Task 제목 입력" autoFocus /><div className="add-subtask-actions"><button type="button" onClick={handleSubmit}>추가</button><button type="button" onClick={() => { setIsAdding(false); setNewTitle('') }}>취소</button></div></div>}</div>
 
-      <div className="add-subtask-row">
-        {!isAdding ? (
-          <button type="button" onClick={() => setIsAdding(true)}>
-            <span>+</span> Sub Task 추가
-          </button>
-        ) : (
-          <div className="add-subtask-form">
-            <input
-              type="text"
-              value={newTitle}
-              onChange={(event) => setNewTitle(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') handleSubmit()
-                if (event.key === 'Escape') {
-                  setIsAdding(false)
-                  setNewTitle('')
-                }
-              }}
-              placeholder="새 Sub Task 제목 입력"
-              autoFocus
-            />
-            <div className="add-subtask-actions">
-              <button type="button" onClick={handleSubmit}>
-                추가
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsAdding(false)
-                  setNewTitle('')
-                }}
-              >
-                취소
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      {dueTarget && <div className="task-field-modal-backdrop"><div className="task-field-modal subtask-field-modal"><div className="task-field-modal-header"><div><span>SUB TASK DUE DATE</span><h3>기한 설정</h3></div><button type="button" onClick={() => setDueTargetId(null)}>×</button></div><DateCalendar cursor={calendarCursor} selectedDate={dueDateDraft} savedDate={dueTarget.dueDate} selectedLabel="새 기한" savedLabel="기존 기한" onMoveMonth={(direction) => setCalendarCursor((current) => new Date(current.getFullYear(), current.getMonth() + direction, 1))} onSelectDate={setDueDateDraft} /><div className="selected-date-preview">선택한 새 기한 <strong>{dueDateDraft || '날짜를 선택하세요'}</strong></div>{editorError && <div className="task-field-error">{editorError}</div>}<div className="task-field-modal-actions"><button className="field-clear-button" type="button" disabled={isSaving} onClick={() => void saveDueDate('')}>기한 없음</button><button type="button" disabled={isSaving || !dueDateDraft} onClick={() => void saveDueDate()}>저장</button><button type="button" disabled={isSaving} onClick={() => setDueTargetId(null)}>취소</button></div></div></div>}
 
-      {deleteTarget && (
-        <div className="modal-backdrop">
-          <div className="confirm-modal">
-            <div className="confirm-modal-title">Sub Task 삭제 확인</div>
-            <div className="confirm-modal-body">
-              "{deleteTarget.title}" 항목을 삭제하시겠습니까?
-            </div>
-            <div className="confirm-modal-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  onDeleteSubTask(deleteTarget.id)
-                  setDeleteTargetId(null)
-                }}
-              >
-                삭제
-              </button>
-              <button type="button" onClick={() => setDeleteTargetId(null)}>
-                취소
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {assigneeTarget && <div className="task-field-modal-backdrop"><div className="task-field-modal compact-field-modal subtask-field-modal"><div className="task-field-modal-header"><div><span>SUB TASK ASSIGNEE</span><h3>담당자 복수 지정</h3></div><button type="button" onClick={() => setAssigneeTargetId(null)}>×</button></div><div className="assignee-option-list"><button className={`assignee-none-option ${selectedAssigneeIds.length === 0 ? 'is-selected' : ''}`} type="button" onClick={() => setSelectedAssigneeIds([])}><span className="assignee-none-icon">−</span><span><strong>담당자 없음</strong><small>담당자를 지정하지 않고 진행합니다.</small></span></button>{taskAssignees.map((assignee) => <label className={`assignee-option ${selectedAssigneeIds.includes(assignee.id) ? ' is-selected' : ''}`} key={assignee.id}><input type="checkbox" checked={selectedAssigneeIds.includes(assignee.id)} onChange={() => setSelectedAssigneeIds((current) => current.includes(assignee.id) ? current.filter((id) => id !== assignee.id) : [...current, assignee.id])} /><span className="assignee-option-avatar">{assignee.name.charAt(0).toUpperCase()}</span><span><strong>{assignee.name}</strong><small>{assignee.email}</small></span></label>)}</div>{taskAssignees.length === 0 && <div className="subtask-assignee-empty">상위 Task에 지정된 담당자가 없습니다. 담당자 없음으로 저장할 수 있습니다.</div>}{editorError && <div className="task-field-error">{editorError}</div>}<div className="task-field-modal-actions"><button type="button" disabled={isSaving} onClick={() => void saveAssignees()}>저장</button><button type="button" disabled={isSaving} onClick={() => setAssigneeTargetId(null)}>취소</button></div></div></div>}
+
+      {deleteTarget && <div className="modal-backdrop"><div className="confirm-modal"><div className="confirm-modal-title">Sub Task 삭제 확인</div><div className="confirm-modal-body">“{deleteTarget.title}” 항목을 삭제하시겠습니까?</div><div className="confirm-modal-actions"><button type="button" onClick={() => { onDeleteSubTask(deleteTarget.id); setDeleteTargetId(null) }}>삭제</button><button type="button" onClick={() => setDeleteTargetId(null)}>취소</button></div></div></div>}
     </section>
   )
 }

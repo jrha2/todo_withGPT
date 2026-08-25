@@ -8,6 +8,7 @@ export type BriefingChange = {
   title: string
   summary: string
   createdAt: string
+  isMine: boolean
 }
 
 export type BriefingDueItem = {
@@ -19,6 +20,7 @@ export type BriefingDueItem = {
   dueDate: string
   completed: boolean
   assignee: string
+  isMine: boolean
 }
 
 export type BriefingData = {

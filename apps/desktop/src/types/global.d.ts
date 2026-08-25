@@ -15,6 +15,7 @@ declare global {
         createUser: (input: unknown) => Promise<unknown>
         updateUser: (userId: string, changes: unknown) => Promise<unknown>
         deleteUser: (userId: string) => Promise<unknown>
+        getUserReferences: (userId: string) => Promise<unknown>
       }
       app: {
         onSelectTask: (callback: (taskId: string) => void) => () => void
@@ -80,13 +81,18 @@ declare global {
         delete: (subTaskId: string) => Promise<unknown>
         update: (
           subTaskId: string,
-          field: 'title' | 'dueDate' | 'assignee',
-          value: string,
+          field: 'title' | 'dueDate' | 'assignee' | 'assignees',
+          value: string | string[],
         ) => Promise<unknown>
+        reorder: (taskId: string, orderedIds: string[]) => Promise<unknown>
       }
       memo: {
         getByTask: (taskId: string) => Promise<unknown>
         save: (taskId: string, memo: string) => Promise<unknown>
+        getAllByTask: (taskId: string) => Promise<unknown>
+        create: (taskId: string, contentHtml: string) => Promise<unknown>
+        update: (memoId: string, contentHtml: string) => Promise<unknown>
+        delete: (memoId: string) => Promise<unknown>
       }
       comment: {
         getByTask: (taskId: string) => Promise<unknown>

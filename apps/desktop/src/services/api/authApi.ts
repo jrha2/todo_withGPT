@@ -18,6 +18,14 @@ export type ManagedUserInput = {
   isActive?: boolean
 }
 
+export type ManagedUserReferences = {
+  user: AuthUser
+  tasks: Array<{ taskId: string; title: string; relations: string[] }>
+  folders: Array<{ id: string; title: string }>
+  activityCount: number
+  hasRelatedData: boolean
+}
+
 export async function getAuthServerUrl() {
   if (!window.api?.auth?.getServerUrl) {
     throw new Error('AUTH_API_UNAVAILABLE')
@@ -109,4 +117,11 @@ export async function deleteManagedUser(userId: string) {
   }
 
   return window.api.admin.deleteUser(userId) as Promise<{ id: string }>
+}
+
+export async function getManagedUserReferences(userId: string) {
+  if (!window.api?.admin?.getUserReferences) {
+    throw new Error('ADMIN_API_UNAVAILABLE')
+  }
+  return window.api.admin.getUserReferences(userId) as Promise<ManagedUserReferences>
 }

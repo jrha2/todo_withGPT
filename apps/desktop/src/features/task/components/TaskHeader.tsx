@@ -100,7 +100,7 @@ function getCalendarDays(cursor: Date) {
   })
 }
 
-function DateCalendar({
+export function DateCalendar({
   cursor,
   selectedDate,
   savedDate,
@@ -322,11 +322,6 @@ function TaskHeader({
   const clearDueDate = () => saveField('dueDate', '')
 
   const saveAssignees = async () => {
-    if (selectedAssigneeIds.length + manualAssigneeNames.length === 0) {
-      setErrorMessage('담당자를 한 명 이상 선택해 주세요.')
-      return
-    }
-
     setIsSaving(true)
     setErrorMessage('')
     try {
@@ -453,7 +448,7 @@ function TaskHeader({
   }
 
   return (
-    <header className="detail-header">
+    <header className={`detail-header ${taskDetail.completed ? 'is-completed' : ''}`}>
       <div className="detail-toolbar">
         <p className="detail-path">{taskDetail.path.replace(' > ', '  /  ')}</p>
       </div>
@@ -646,6 +641,26 @@ function TaskHeader({
             </div>
 
             <div className="assignee-option-list">
+              <button
+                className={
+                  'assignee-none-option' +
+                  (selectedAssigneeIds.length === 0 &&
+                  manualAssigneeNames.length === 0
+                    ? ' is-selected'
+                    : '')
+                }
+                type="button"
+                onClick={() => {
+                  setSelectedAssigneeIds([])
+                  setManualAssigneeNames([])
+                }}
+              >
+                <span className="assignee-none-icon">−</span>
+                <span>
+                  <strong>담당자 없음</strong>
+                  <small>담당자를 지정하지 않고 Task를 진행합니다.</small>
+                </span>
+              </button>
               {assigneeUsers.map((user) => (
                 <label
                   className={

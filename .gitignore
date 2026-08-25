@@ -14,6 +14,7 @@ server/database/todo_app.db-shm
 server/database/todo_app.db-wal
 server/uploads/
 server/backups/
+server/updates/
 server/.env
 
 # Local UI mockups and browser profiles used during design review

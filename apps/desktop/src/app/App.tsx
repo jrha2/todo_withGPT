@@ -28,24 +28,35 @@ function App() {
 
   useEffect(() => {
     const showRemoteChange = (change: { revision: number }) => {
-      setPendingSyncRevision((current) =>
-        Math.max(current || 0, Number(change.revision) || 0),
-      )
+      const revision = Number(change.revision) || 0
+      if (!revision) return
+
+      setPendingSyncRevision((current) => Math.max(current ?? 0, revision))
       setIsSyncPromptOpen(true)
     }
+
     const unsubscribe = window.api.sync.onRemoteChange(showRemoteChange)
-    window.api.sync.getState().then((state) => {
-      if (state.pendingEvent) showRemoteChange(state.pendingEvent)
-    }).catch((error) => {
-      console.error('Failed to load sync state:', error)
-    })
+    window.api.sync
+      .getState()
+      .then((state) => {
+        if (state.pendingEvent) showRemoteChange(state.pendingEvent)
+      })
+      .catch((error) => {
+        console.error('Failed to load sync state:', error)
+      })
+
     return unsubscribe
   }, [])
 
   const applyServerChanges = async () => {
     if (!pendingSyncRevision) return
-    await window.api.sync.acknowledge(pendingSyncRevision)
-    window.location.reload()
+
+    try {
+      await window.api.sync.acknowledge(pendingSyncRevision)
+      window.location.reload()
+    } catch (error) {
+      console.error('Failed to apply remote server change:', error)
+    }
   }
 
   const handleLogout = async () => {
@@ -71,7 +82,7 @@ function App() {
     <>
       {pendingSyncRevision && !isSyncPromptOpen && (
         <div className="sync-update-banner">
-          <span>서버에 반영하지 않은 변경 내용이 있습니다.</span>
+          <span>서버에 아직 반영하지 않은 변경 내용이 있습니다.</span>
           <button type="button" onClick={() => setIsSyncPromptOpen(true)}>
             확인하기
           </button>
@@ -96,9 +107,9 @@ function App() {
           <div className="sync-update-modal" role="dialog" aria-modal="true">
             <div className="sync-update-icon">↻</div>
             <h2>서버 변경 내용 확인</h2>
-            <p>서버에 다른 사용자가 변경한 내용이 있습니다. 반영하시겠습니까?</p>
+            <p>다른 사용자가 서버 데이터를 변경했습니다.</p>
             <small>
-              반영하기 전에는 오래된 내용으로 서버 데이터를 덮어쓰지 않도록 저장이 제한됩니다.
+              작성 중인 내용을 확인한 뒤 반영해 주세요. 반영하면 최신 데이터를 불러오기 위해 화면이 새로고침됩니다.
             </small>
             <div className="sync-update-actions">
               <button type="button" onClick={applyServerChanges}>반영하기</button>

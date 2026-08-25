@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { createReadStream, mkdirSync } from 'node:fs'
-import { stat, unlink, writeFile } from 'node:fs/promises'
+import { createReadStream, mkdirSync, watch } from 'node:fs'
+import { readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,12 +11,14 @@ import {
   createAttachment,
   createFolder,
   createManagedUser,
+  createMemo,
   createSubTask,
   createTask,
   deleteComment,
   deleteNavigationNode,
   deleteSubTask,
   deleteManagedUser,
+  deleteMemo,
   dismissReminderForUser,
   dropNavigationNode,
   getAssigneeUsers,
@@ -24,7 +26,9 @@ import {
   getComments,
   getDb,
   getManagedUsers,
+  getManagedUserReferences,
   getMemo,
+  getMemos,
   getDueDesktopReminders,
   getNavigationTree,
   getBriefingData,
@@ -36,6 +40,7 @@ import {
   moveNavigationNode,
   moveNavigationNodeByDirection,
   renameNavigationNode,
+  reorderSubTasks,
   recordActivity,
   saveMemo,
   snoozeReminderForUser,
@@ -46,13 +51,16 @@ import {
   updateSubTask,
   updateTaskDetail,
   updateManagedUser,
+  updateMemo,
 } from '../apps/desktop/electron/db.js'
 
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '0.9.2-beta.0'
+const serverVersion = '0.9.8-beta.0'
 const syncClients = new Set()
+let updateDirectoryWatcher = null
+let updateBroadcastTimer = null
 const maxAttachmentBytes = Math.max(
   1024 * 1024,
   Number(process.env.TODO_MAX_ATTACHMENT_BYTES || 25 * 1024 * 1024),
@@ -61,8 +69,103 @@ const uploadsDirectory = path.resolve(
   process.env.TODO_UPLOADS_PATH ||
     path.join(path.dirname(fileURLToPath(import.meta.url)), 'uploads'),
 )
+const updatesDirectory = path.resolve(
+  process.env.TODO_UPDATES_PATH ||
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'updates'),
+)
 
 mkdirSync(uploadsDirectory, { recursive: true })
+mkdirSync(updatesDirectory, { recursive: true })
+
+function getUpdateContentType(fileName) {
+  if (fileName.endsWith('.yml') || fileName.endsWith('.yaml')) {
+    return 'text/yaml; charset=utf-8'
+  }
+  if (fileName.endsWith('.json')) return 'application/json; charset=utf-8'
+  return 'application/octet-stream'
+}
+
+async function serveUpdateFile(request, response, pathname) {
+  let fileName
+  try {
+    fileName = decodeURIComponent(pathname.slice('/updates/'.length))
+  } catch {
+    sendJson(response, 400, { error: 'INVALID_UPDATE_PATH' })
+    return
+  }
+
+  if (
+    !fileName ||
+    fileName !== path.basename(fileName) ||
+    fileName.includes('/') ||
+    fileName.includes('\\')
+  ) {
+    sendJson(response, 404, { error: 'UPDATE_FILE_NOT_FOUND' })
+    return
+  }
+
+  const filePath = path.join(updatesDirectory, fileName)
+  let fileStat
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    sendJson(response, 404, { error: 'UPDATE_FILE_NOT_FOUND' })
+    return
+  }
+
+  if (!fileStat.isFile()) {
+    sendJson(response, 404, { error: 'UPDATE_FILE_NOT_FOUND' })
+    return
+  }
+
+  const headers = {
+    'Content-Type': getUpdateContentType(fileName),
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': fileName.endsWith('.yml') || fileName.endsWith('.yaml')
+      ? 'no-store, no-cache, must-revalidate'
+      : 'public, max-age=3600',
+  }
+  const range = String(request.headers.range || '')
+    .match(/^bytes=(\d+)-(\d*)$/)
+
+  if (range) {
+    const start = Number(range[1])
+    const requestedEnd = range[2] ? Number(range[2]) : fileStat.size - 1
+    const end = Math.min(requestedEnd, fileStat.size - 1)
+
+    if (!Number.isInteger(start) || start < 0 || start > end) {
+      response.writeHead(416, {
+        ...headers,
+        'Content-Range': `bytes */${fileStat.size}`,
+      })
+      response.end()
+      return
+    }
+
+    response.writeHead(206, {
+      ...headers,
+      'Content-Length': end - start + 1,
+      'Content-Range': `bytes ${start}-${end}/${fileStat.size}`,
+    })
+    if (request.method === 'HEAD') {
+      response.end()
+      return
+    }
+    createReadStream(filePath, { start, end }).pipe(response)
+    return
+  }
+
+  response.writeHead(200, {
+    ...headers,
+    'Content-Length': fileStat.size,
+  })
+  if (request.method === 'HEAD') {
+    response.end()
+    return
+  }
+  createReadStream(filePath).pipe(response)
+}
 
 function formatSqliteDateTime(date) {
   return date.toISOString().replace('T', ' ').replace('Z', '').slice(0, 19)
@@ -158,8 +261,9 @@ function describeMutation(context, body) {
   let taskId = null
   let summary = '업무 내용이 변경되었습니다.'
 
-  const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(subtasks|memo|comments|attachments|toggle-completed))?$/)
+  const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(subtasks|memo|memos|comments|attachments|toggle-completed)(?:\/order)?)?$/)
   const subTaskMatch = pathname.match(/^\/api\/subtasks\/([^/]+)(?:\/toggle)?$/)
+  const memoMatch = pathname.match(/^\/api\/memos\/([^/]+)$/)
   const commentMatch = pathname.match(/^\/api\/comments\/([^/]+)$/)
   const navigationMatch = pathname.match(/^\/api\/navigation\/nodes\/([^/]+)(?:\/(title|move|copy|reorder))?$/)
   const reminderCompleteMatch = pathname.match(/^\/api\/reminders\/([^/]+)\/complete$/)
@@ -201,8 +305,15 @@ function describeMutation(context, body) {
     if (taskMatch[2] === 'subtasks') {
       entityType = 'subtask'
       entityId = body?.subTask?.id || null
-      summary = '새 Sub Task가 생성되었습니다.'
-    } else if (taskMatch[2] === 'memo') {
+      if (pathname.endsWith('/order')) {
+        actionType = 'moved'
+        summary = 'Sub Task 순서가 변경되었습니다.'
+      } else {
+        summary = '새 Sub Task가 생성되었습니다.'
+      }
+    } else if (taskMatch[2] === 'memo' || taskMatch[2] === 'memos') {
+      entityType = 'memo'
+      entityId = body?.memo?.id || null
       summary = '메모가 변경되었습니다.'
     } else if (taskMatch[2] === 'comments') {
       entityType = 'comment'
@@ -232,6 +343,17 @@ function describeMutation(context, body) {
         ? 'Sub Task가 완료되었습니다.'
         : 'Sub Task가 다시 진행 상태로 변경되었습니다.'
     } else summary = 'Sub Task 정보가 변경되었습니다.'
+  } else if (memoMatch) {
+    entityType = 'memo'
+    entityId = decodeURIComponent(memoMatch[1])
+    const memoTask = getDb().prepare(`
+      SELECT task_detail.nav_node_id AS taskId
+      FROM memos AS memo
+      JOIN task_details AS task_detail ON task_detail.id = memo.task_detail_id
+      WHERE memo.id = ?
+    `).get(entityId)
+    taskId = body?.result?.taskId || memoTask?.taskId || null
+    summary = method === 'DELETE' ? '메모가 삭제되었습니다.' : '메모가 수정되었습니다.'
   } else if (commentMatch) {
     entityType = 'comment'
     entityId = decodeURIComponent(commentMatch[1])
@@ -268,6 +390,54 @@ function broadcastSyncEvent(event) {
     } catch {
       syncClients.delete(client)
     }
+  })
+}
+
+async function broadcastPublishedUpdate(metadataFileName) {
+  try {
+    const metadata = await readFile(
+      path.join(updatesDirectory, metadataFileName),
+      'utf8',
+    )
+    const version = metadata.match(/^version:\s*['"]?([^'"\s]+)['"]?/m)?.[1]
+    const artifact = metadata.match(/^path:\s*['"]?(.+?)['"]?\s*$/m)?.[1]
+    if (!version || !artifact) return
+
+    await stat(path.join(updatesDirectory, path.basename(artifact)))
+    broadcastSyncEvent({
+      // 0.9.3 클라이언트가 이 신호를 업무 데이터 변경으로 오인하지 않도록
+      // 데이터 리비전과 분리된 0을 사용합니다.
+      revision: 0,
+      sourceClientId: '',
+      method: 'PUBLISH',
+      pathname: `/updates/${metadataFileName}`,
+      changedAt: new Date().toISOString(),
+      kind: 'app-update',
+      version,
+      channel: path.basename(metadataFileName, path.extname(metadataFileName)),
+    })
+    console.log(`[Update] Push sent for version ${version}`)
+  } catch (error) {
+    console.error('[Update] Failed to announce published update:', error)
+  }
+}
+
+function startUpdateDirectoryWatcher() {
+  updateDirectoryWatcher = watch(
+    updatesDirectory,
+    { persistent: false },
+    (_eventType, changedFileName) => {
+      const metadataFileName = String(changedFileName || '')
+      if (!/^(latest|beta)\.ya?ml$/i.test(metadataFileName)) return
+      clearTimeout(updateBroadcastTimer)
+      updateBroadcastTimer = setTimeout(
+        () => void broadcastPublishedUpdate(metadataFileName),
+        750,
+      )
+    },
+  )
+  updateDirectoryWatcher.on('error', (error) => {
+    console.error('[Update] Directory watcher failed:', error)
   })
 }
 
@@ -488,6 +658,14 @@ async function handleRequest(request, response) {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
   const pathname = url.pathname
 
+  if (
+    (method === 'GET' || method === 'HEAD') &&
+    pathname.startsWith('/updates/')
+  ) {
+    await serveUpdateFile(request, response, pathname)
+    return
+  }
+
   if (response.syncContext?.isMutation) {
     if (response.syncContext.baseRevision === null) {
       throw new Error('CLIENT_UPDATE_REQUIRED')
@@ -548,9 +726,9 @@ async function handleRequest(request, response) {
   }
 
   if (method === 'GET' && pathname === '/api/briefing') {
-    requireSession(request)
+    const session = requireSession(request)
     const days = Number(url.searchParams.get('days') || 7)
-    sendJson(response, 200, { briefing: getBriefingData(days) })
+    sendJson(response, 200, { briefing: getBriefingData(days, session.user.id) })
     return
   }
 
@@ -677,20 +855,31 @@ async function handleRequest(request, response) {
     }
   }
 
-  const taskSubTasksMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/subtasks$/)
+  const taskSubTasksMatch = pathname.match(
+    /^\/api\/tasks\/([^/]+)\/subtasks(?:\/(order))?$/,
+  )
   if (taskSubTasksMatch) {
     requireSession(request)
     const taskId = decodeURIComponent(taskSubTasksMatch[1])
+    const action = taskSubTasksMatch[2]
 
-    if (method === 'GET') {
+    if (method === 'GET' && !action) {
       sendJson(response, 200, { subTasks: getSubTasks(taskId) })
       return
     }
 
-    if (method === 'POST') {
+    if (method === 'POST' && !action) {
       const body = await readJson(request)
       sendJson(response, 201, {
         subTask: createSubTask(taskId, body.title),
+      })
+      return
+    }
+
+    if (method === 'PUT' && action === 'order') {
+      const body = await readJson(request)
+      sendJson(response, 200, {
+        subTasks: reorderSubTasks(taskId, body.orderedIds),
       })
       return
     }
@@ -738,6 +927,44 @@ async function handleRequest(request, response) {
       sendJson(response, 200, {
         memo: saveMemo(taskId, body.memo, session.user.id),
       })
+      return
+    }
+  }
+
+  const taskMemosMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/memos$/)
+  if (taskMemosMatch) {
+    const session = requireSession(request)
+    const taskId = decodeURIComponent(taskMemosMatch[1])
+
+    if (method === 'GET') {
+      sendJson(response, 200, { memos: getMemos(taskId) })
+      return
+    }
+
+    if (method === 'POST') {
+      const body = await readJson(request)
+      sendJson(response, 201, {
+        memo: createMemo(taskId, body.contentHtml, session.user.id),
+      })
+      return
+    }
+  }
+
+  const memoMatch = pathname.match(/^\/api\/memos\/([^/]+)$/)
+  if (memoMatch) {
+    const session = requireSession(request)
+    const memoId = decodeURIComponent(memoMatch[1])
+
+    if (method === 'PUT') {
+      const body = await readJson(request)
+      sendJson(response, 200, {
+        memo: updateMemo(memoId, body.contentHtml, session.user.id),
+      })
+      return
+    }
+
+    if (method === 'DELETE') {
+      sendJson(response, 200, { result: deleteMemo(memoId) })
       return
     }
   }
@@ -944,6 +1171,17 @@ async function handleRequest(request, response) {
   }
 
   const adminUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/)
+  const adminUserReferencesMatch = pathname.match(
+    /^\/api\/admin\/users\/([^/]+)\/references$/,
+  )
+  if (method === 'GET' && adminUserReferencesMatch) {
+    requireAdmin(request)
+    const userId = decodeURIComponent(adminUserReferencesMatch[1])
+    sendJson(response, 200, {
+      references: getManagedUserReferences(userId),
+    })
+    return
+  }
   if (method === 'PUT' && adminUserMatch) {
     const admin = requireAdmin(request)
     const body = await readJson(request)
@@ -975,6 +1213,19 @@ if (!process.env.TODO_ADMIN_PASSWORD) {
   )
 }
 
+let synchronizedMutationQueue = Promise.resolve()
+
+async function executeRequest(request, response) {
+  try {
+    await handleRequest(request, response)
+  } catch (error) {
+    const code = error instanceof Error ? error.message : String(error)
+    const statusCode = getErrorStatus(code)
+    console.error(`[Server] ${request.method} ${request.url}:`, code)
+    sendJson(response, statusCode, { error: code })
+  }
+}
+
 const server = createServer((request, response) => {
   const requestUrl = new URL(
     request.url || '/',
@@ -997,16 +1248,23 @@ const server = createServer((request, response) => {
     committed: false,
   }
   request.syncContext = response.syncContext
-  handleRequest(request, response).catch((error) => {
-    const code = error instanceof Error ? error.message : String(error)
-    const statusCode = getErrorStatus(code)
-    console.error(`[Server] ${request.method} ${request.url}:`, code)
-    sendJson(response, statusCode, { error: code })
-  })
+
+  if (response.syncContext.isMutation) {
+    const scheduledRequest = synchronizedMutationQueue.then(() =>
+      executeRequest(request, response),
+    )
+    synchronizedMutationQueue = scheduledRequest.catch((error) => {
+      console.error('[Server] Mutation queue failed:', error)
+    })
+    return
+  }
+
+  void executeRequest(request, response)
 })
 
 server.listen(port, host, () => {
   console.log(`[투자기획팀 업무관리 공간 서버] API listening on http://${host}:${port}`)
+  startUpdateDirectoryWatcher()
 })
 
 server.on('error', (error) => {
@@ -1015,6 +1273,8 @@ server.on('error', (error) => {
 })
 
 function shutdown() {
+  clearTimeout(updateBroadcastTimer)
+  updateDirectoryWatcher?.close()
   server.close(() => {
     getDb().close()
     process.exit(0)

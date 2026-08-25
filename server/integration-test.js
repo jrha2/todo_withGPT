@@ -1,17 +1,19 @@
 import { spawn } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const databasePath = path.join(root, '.tmp-integration.db')
 const uploadsPath = path.join(root, '.tmp-integration-uploads')
+const updatesPath = path.join(root, '.tmp-integration-updates')
 const port = 4313
 const cleanupTargets = [
   databasePath,
   `${databasePath}-shm`,
   `${databasePath}-wal`,
   uploadsPath,
+  updatesPath,
 ]
 
 function cleanup() {
@@ -21,12 +23,20 @@ function cleanup() {
 }
 
 cleanup()
+mkdirSync(updatesPath, { recursive: true })
+writeFileSync(
+  path.join(updatesPath, 'latest.yml'),
+  'version: 9.9.9\npath: test-update.exe\n',
+  'utf8',
+)
+writeFileSync(path.join(updatesPath, 'test-update.exe'), '0123456789', 'utf8')
 
 const child = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
   env: {
     ...process.env,
     TODO_DATABASE_PATH: databasePath,
     TODO_UPLOADS_PATH: uploadsPath,
+    TODO_UPDATES_PATH: updatesPath,
     TODO_SERVER_PORT: String(port),
     TODO_SERVER_HOST: '127.0.0.1',
     TODO_ADMIN_PASSWORD: 'Integration1234!',
@@ -95,6 +105,27 @@ async function request(pathname, options = {}) {
 
 try {
   await waitForServer()
+  const updateMetadataResponse = await fetch(`${baseUrl}/updates/latest.yml`)
+  if (
+    !updateMetadataResponse.ok ||
+    !(await updateMetadataResponse.text()).includes('version: 9.9.9') ||
+    !String(updateMetadataResponse.headers.get('cache-control')).includes('no-cache')
+  ) {
+    throw new Error('Update metadata endpoint failed')
+  }
+
+  const updateRangeResponse = await fetch(
+    `${baseUrl}/updates/test-update.exe`,
+    { headers: { Range: 'bytes=2-5' } },
+  )
+  if (
+    updateRangeResponse.status !== 206 ||
+    (await updateRangeResponse.text()) !== '2345' ||
+    updateRangeResponse.headers.get('content-range') !== 'bytes 2-5/10'
+  ) {
+    throw new Error('Update artifact range endpoint failed')
+  }
+
   const login = await request('/api/auth/login', {
     method: 'POST',
     body: { loginId: 'admin', password: 'Integration1234!' },
@@ -167,8 +198,17 @@ try {
     )
     createdSubTasks.push(result.subTask)
   }
-  if (createdSubTasks.some((subTask) => subTask.assigneeId || subTask.assignee)) {
-    throw new Error('New Sub Task should allow an unassigned state')
+  if (
+    createdSubTasks.some(
+      (subTask) =>
+        subTask.assigneeId !== login.user.id ||
+        subTask.assignee !== login.user.name,
+    )
+  ) {
+    throw new Error('New Sub Task did not inherit the first Task assignee')
+  }
+  if (createdSubTasks.some((subTask) => subTask.dueDate)) {
+    throw new Error('New Sub Task should allow an empty due date')
   }
   const dueDates = ['2026-09-02', '2026-09-01', '2026-09-01']
   for (let index = 0; index < createdSubTasks.length; index += 1) {
@@ -181,11 +221,29 @@ try {
       },
     )
   }
-  const sortedSubTasks = (
+  const unchangedSubTasks = (
     await request(`/api/tasks/${encodeURIComponent(taskId)}/subtasks`, { token })
   ).subTasks
-  if (sortedSubTasks.map((subTask) => subTask.title).join(',') !== '정렬 B,정렬 C,정렬 A') {
-    throw new Error('Sub Task due-date and creation ordering failed')
+  if (unchangedSubTasks.map((subTask) => subTask.title).join(',') !== '정렬 A,정렬 B,정렬 C') {
+    throw new Error('Sub Task order changed automatically after a due-date edit')
+  }
+  const reorderedSubTasks = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/subtasks/order`, {
+      method: 'PUT',
+      token,
+      body: {
+        orderedIds: [createdSubTasks[2].id, createdSubTasks[0].id, createdSubTasks[1].id],
+      },
+    })
+  ).subTasks
+  if (reorderedSubTasks.map((subTask) => subTask.title).join(',') !== '정렬 C,정렬 A,정렬 B') {
+    throw new Error('Sub Task drag-and-drop ordering failed')
+  }
+  const persistedSubTaskOrder = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/subtasks`, { token })
+  ).subTasks
+  if (persistedSubTaskOrder.map((subTask) => subTask.title).join(',') !== '정렬 C,정렬 A,정렬 B') {
+    throw new Error('Sub Task drag-and-drop order was not persisted')
   }
   const renamedSubTask = (
     await request(`/api/subtasks/${encodeURIComponent(createdSubTasks[0].id)}`, {
@@ -207,6 +265,31 @@ try {
   if (unassignedSubTask.assigneeId || unassignedSubTask.assignee) {
     throw new Error('Sub Task assignee could not be cleared')
   }
+  const noDueDateSubTask = (
+    await request(`/api/subtasks/${encodeURIComponent(createdSubTasks[0].id)}`, {
+      method: 'PUT',
+      token,
+      body: { field: 'dueDate', value: '' },
+    })
+  ).subTask
+  if (noDueDateSubTask.dueDate) {
+    throw new Error('Sub Task due date could not be cleared')
+  }
+
+  const taskWithoutAssignees = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PUT',
+      token,
+      body: {
+        ...(await request(`/api/tasks/${encodeURIComponent(taskId)}`, { token })).task,
+        assigneeIds: [],
+        manualAssigneeNames: [],
+      },
+    })
+  ).task
+  if (taskWithoutAssignees.assignee || taskWithoutAssignees.assignees.length > 0) {
+    throw new Error('Task assignees could not be cleared')
+  }
 
   const savedMemo = (
     await request(`/api/tasks/${encodeURIComponent(taskId)}/memo`, {
@@ -221,6 +304,49 @@ try {
     !savedMemo.updatedAt
   ) {
     throw new Error('Memo author metadata was not saved')
+  }
+
+  const createdMemo = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/memos`, {
+      method: 'POST',
+      token,
+      body: { contentHtml: '<strong>두 번째 메모</strong>' },
+    })
+  ).memo
+  const thirdMemo = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/memos`, {
+      method: 'POST',
+      token,
+      body: { contentHtml: '<span style="color:#c2410c">세 번째 메모</span>' },
+    })
+  ).memo
+  const allMemos = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/memos`, { token })
+  ).memos
+  if (
+    allMemos.length !== 3 ||
+    !allMemos.some((memo) => memo.contentHtml.includes('<strong>'))
+  ) {
+    throw new Error('Multiple memo creation or rich-text content failed')
+  }
+  const updatedMemo = (
+    await request(`/api/memos/${encodeURIComponent(createdMemo.id)}`, {
+      method: 'PUT',
+      token,
+      body: { contentHtml: '<strong>수정된 메모</strong>' },
+    })
+  ).memo
+  if (!updatedMemo.contentHtml.includes('수정된 메모')) {
+    throw new Error('Rich memo update failed')
+  }
+  await request(`/api/memos/${encodeURIComponent(thirdMemo.id)}`, {
+    method: 'DELETE', token,
+  })
+  const remainingMemos = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/memos`, { token })
+  ).memos
+  if (remainingMemos.length !== 2) {
+    throw new Error('Memo deletion failed')
   }
 
   const original = Buffer.from(
@@ -264,6 +390,45 @@ try {
   ).task
   if (updatedDetail.assignees.length !== 2) {
     throw new Error('Multiple Task assignees were not saved')
+  }
+  const inheritedSubTask = (
+    await request(`/api/tasks/${encodeURIComponent(taskId)}/subtasks`, {
+      method: 'POST', token, body: { title: '복수 담당자 상속 확인' },
+    })
+  ).subTask
+  if (inheritedSubTask.assignees.length !== 2 || inheritedSubTask.dueDate) {
+    throw new Error('New Sub Task did not inherit every Task assignee with an empty due date')
+  }
+  const multiAssigneeSubTask = (
+    await request(`/api/subtasks/${encodeURIComponent(createdSubTasks[0].id)}`, {
+      method: 'PUT',
+      token,
+      body: { field: 'assignees', value: [login.user.id, jh.id] },
+    })
+  ).subTask
+  if (
+    multiAssigneeSubTask.assignees.length !== 2 ||
+    !multiAssigneeSubTask.assignee.includes(login.user.name) ||
+    !multiAssigneeSubTask.assignee.includes(jh.name)
+  ) {
+    throw new Error('Multiple Sub Task assignees were not saved')
+  }
+  const clearedSubTaskAssignees = (
+    await request(`/api/subtasks/${encodeURIComponent(createdSubTasks[0].id)}`, {
+      method: 'PUT',
+      token,
+      body: { field: 'assignees', value: [] },
+    })
+  ).subTask
+  if (clearedSubTaskAssignees.assignees.length || clearedSubTaskAssignees.assignee) {
+    throw new Error('Sub Task assignees could not be cleared when the Task has assignees')
+  }
+
+  const userReferences = (
+    await request(`/api/admin/users/${encodeURIComponent(jh.id)}/references`, { token })
+  ).references
+  if (!userReferences.hasRelatedData || !userReferences.tasks.some((task) => task.taskId === taskId)) {
+    throw new Error('Admin user reference details are missing')
   }
 
   const relatedUserDelete = await fetch(
@@ -368,6 +533,29 @@ try {
     throw new Error('SSE sync stream did not send its initial state')
   }
 
+  writeFileSync(
+    path.join(updatesPath, 'beta.yml'),
+    'version: 9.9.10\npath: test-update.exe\n',
+    'utf8',
+  )
+  let updatePushChunk = ''
+  const updatePushDeadline = Date.now() + 4000
+  while (!updatePushChunk.includes('"kind":"app-update"')) {
+    const remaining = updatePushDeadline - Date.now()
+    if (remaining <= 0) throw new Error('Update Push event timed out')
+    const readResult = await Promise.race([
+      syncReader.read(),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Update Push event timed out')),
+        remaining,
+      )),
+    ])
+    updatePushChunk += Buffer.from(readResult.value || []).toString('utf8')
+  }
+  if (!updatePushChunk.includes('"version":"9.9.10"')) {
+    throw new Error('Update Push event did not include the published version')
+  }
+
   const synchronizedMutation = await fetch(`${baseUrl}/api/navigation/folders`, {
     method: 'POST',
     headers: {
@@ -421,8 +609,14 @@ try {
   if (!briefing.changes.some((change) => change.title)) {
     throw new Error('To Do Briefing activity history is missing')
   }
+  if (
+    briefing.changes.some((change) => typeof change.isMine !== 'boolean') ||
+    briefing.dueItems.some((item) => typeof item.isMine !== 'boolean')
+  ) {
+    throw new Error('To Do Briefing personal scope marker is missing')
+  }
 
-  console.log('PASS server API, navigation auto-expand, empty dates/reminders, Task title editing, SSE sync, conflict prevention, Briefing, Sub Task editing/order/unassigned state, memo authorship, safe user deletion, attachment, multi-assignee, and reminder integration')
+  console.log('PASS server API, Push update announcement, automatic update files/ranges, navigation auto-expand, empty dates/reminders, Task title editing, SSE sync, conflict prevention, Briefing, Sub Task editing/order/unassigned state, memo authorship, safe user deletion, attachment, multi-assignee, and reminder integration')
 } finally {
   child.kill('SIGTERM')
   await new Promise((resolve) => child.once('exit', resolve))

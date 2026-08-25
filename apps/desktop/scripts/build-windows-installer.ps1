@@ -24,7 +24,7 @@ if (Test-Path -LiteralPath $sevenZip) {
 }
 
 $builder = Join-Path $projectDirectory 'node_modules\.bin\electron-builder.cmd'
-$arguments = @('--win', 'nsis')
+$arguments = @('--win', 'nsis', '--publish', 'never')
 if (Test-Path -LiteralPath $electronArchive) {
   $arguments += '--config.electronDist=.'
 }
@@ -36,7 +36,36 @@ $package = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $projectDirec
 $artifactName = $package.build.win.artifactName.Replace('${version}', [string]$package.version).Replace('${ext}', 'exe')
 $installer = Join-Path $projectDirectory (Join-Path 'release' $artifactName)
 $checksumPath = "$installer.sha256.txt"
-$hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath $checksumPath -Value "$hash  $(Split-Path $installer -Leaf)" -Encoding ASCII
+$hashStream = [System.IO.File]::OpenRead($installer)
+try {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = ([System.BitConverter]::ToString($sha256.ComputeHash($hashStream))).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $sha256.Dispose()
+  }
+} finally {
+  $hashStream.Dispose()
+}
+Set-Content -LiteralPath $checksumPath -Value "$hash  $(Split-Path $installer -Leaf)" -Encoding UTF8
+
+$updateChannel = 'latest'
+if ([string]$package.version -match '-([a-zA-Z]+)') {
+  $updateChannel = $Matches[1].ToLowerInvariant()
+}
+$metadata = Join-Path $projectDirectory "release\$updateChannel.yml"
+$blockmap = "$installer.blockmap"
+$repositoryDirectory = (Resolve-Path -LiteralPath (Join-Path $projectDirectory '..\..')).Path
+$updateDirectory = Join-Path $repositoryDirectory 'server\updates'
+New-Item -ItemType Directory -Force -Path $updateDirectory | Out-Null
+
+foreach ($updateFile in @($installer, $blockmap, $metadata)) {
+  if (-not (Test-Path -LiteralPath $updateFile)) {
+    throw "Automatic update artifact was not generated: $updateFile"
+  }
+  Copy-Item -LiteralPath $updateFile -Destination $updateDirectory -Force
+}
+
 Write-Host "Installer: $installer"
 Write-Host "SHA256: $hash"
+Write-Host "Update files: $updateDirectory"

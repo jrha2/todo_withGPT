@@ -111,6 +111,7 @@ function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
   const [data, setData] = useState<BriefingData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
+  const [scope, setScope] = useState<'team' | 'mine'>('team')
 
   const load = async () => {
     setIsLoading(true)
@@ -147,15 +148,21 @@ function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
   }, [])
 
   const summary = useMemo(() => {
-    const changes = data?.changes || []
-    const dueItems = data?.dueItems || []
+    const changes = (data?.changes || []).filter((item) => scope === 'team' || item.isMine)
+    const dueItems = (data?.dueItems || []).filter((item) => scope === 'team' || item.isMine)
     return {
       changes: changes.length,
       completed: changes.filter((item) => item.actionType === 'completed').length,
       comments: changes.filter((item) => item.actionType === 'commented').length,
       attention: dueItems.filter((item) => !item.completed && getDueStatus(item.dueDate).tone !== 'upcoming').length,
     }
-  }, [data])
+  }, [data, scope])
+  const visibleChanges = (data?.changes || []).filter(
+    (item) => scope === 'team' || item.isMine,
+  )
+  const visibleDueItems = (data?.dueItems || []).filter(
+    (item) => scope === 'team' || item.isMine,
+  )
 
   return (
     <section className="briefing-screen">
@@ -170,6 +177,11 @@ function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
         </button>
       </header>
 
+      <div className="briefing-scope-tabs" role="tablist" aria-label="브리핑 업무 범위">
+        <button className={scope === 'team' ? 'is-active' : ''} type="button" onClick={() => setScope('team')}>팀 전체 업무</button>
+        <button className={scope === 'mine' ? 'is-active' : ''} type="button" onClick={() => setScope('mine')}>내가 등록된 업무</button>
+      </div>
+
       {error && <div className="briefing-error">{error}</div>}
 
       <div className="briefing-summary-grid">
@@ -183,26 +195,26 @@ function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
 
       <div className="briefing-section-heading">
         <div><span>DEADLINES</span><h2>최근·향후 일주일 기한 업무</h2></div>
-        <small>{data?.dueItems.length || 0}개</small>
+        <small>{visibleDueItems.length}개</small>
       </div>
       <div className="briefing-due-grid">
-        {data?.dueItems.map((item) => (
+        {visibleDueItems.map((item) => (
           <DueCard key={`${item.itemType}-${item.id}`} item={item} onOpenTask={onOpenTask} />
         ))}
-        {!isLoading && data?.dueItems.length === 0 && (
+        {!isLoading && visibleDueItems.length === 0 && (
           <div className="briefing-empty">해당 기간에 기한이 있는 업무가 없습니다.</div>
         )}
       </div>
 
       <div className="briefing-section-heading activity-heading">
         <div><span>ACTIVITY</span><h2>최근 일주일 변동내역</h2></div>
-        <small>{data?.changes.length || 0}건</small>
+        <small>{visibleChanges.length}건</small>
       </div>
       <div className="briefing-change-list">
-        {data?.changes.map((change) => (
+        {visibleChanges.map((change) => (
           <ChangeCard key={change.id} change={change} onOpenTask={onOpenTask} />
         ))}
-        {!isLoading && data?.changes.length === 0 && (
+        {!isLoading && visibleChanges.length === 0 && (
           <div className="briefing-empty">최근 일주일 동안 기록된 변경사항이 없습니다.</div>
         )}
       </div>

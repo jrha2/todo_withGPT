@@ -48,16 +48,7 @@ export const mockTaskDetailsById = {
     dueDate: '2026-08-10',
     alarm: '2026-08-09 09:00',
     assignee: 'JH Jae-Ryong Ha',
-    attachments: [
-      {
-        id: 'attachment-1',
-        name: 'naming-ceremony-plan.xlsx',
-      },
-      {
-        id: 'attachment-2',
-        name: 'participants_draft.docx',
-      },
-    ],
+    attachments: [],
     subTasks: [
       {
         id: 'subtask-1',
@@ -118,12 +109,7 @@ export const mockTaskDetailsById = {
     dueDate: '2026-08-15',
     alarm: '2026-08-13 14:00',
     assignee: 'PS Park Staff',
-    attachments: [
-      {
-        id: 'attachment-3',
-        name: 'guest-list-draft.xlsx',
-      },
-    ],
+    attachments: [],
     subTasks: [
       {
         id: 'subtask-4',
