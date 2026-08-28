@@ -4,7 +4,7 @@
   "description": "팀 업무와 알림을 관리하는 데스크톱 To Do 앱",
   "author": "jrha2",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -47,6 +47,7 @@
       "electron/briefing.html",
       "electron/briefing.css",
       "electron/briefing.js",
+      "build/tray-icon.png",
       "package.json"
     ],
     "electronLanguages": [

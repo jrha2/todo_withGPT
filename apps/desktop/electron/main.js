@@ -616,14 +616,26 @@ function createMainWindow(showOnReady = true) {
 }
 
 function createTrayIcon() {
-  const svg =
+  const trayIconPath = path.join(app.getAppPath(), 'build', 'tray-icon.png')
+  const trayIcon = nativeImage.createFromPath(trayIconPath)
+  if (!trayIcon.isEmpty()) {
+    return trayIcon
+  }
+
+  console.error(`[Tray] Failed to load tray icon: ${trayIconPath}`)
+  const fallbackSvg =
     '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">' +
-    '<rect width="32" height="32" rx="9" fill="#6657d8"/>' +
-    '<path d="M9 16.5l4.3 4.3L23.5 10.5" fill="none" stroke="white" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '<rect x="2" y="2" width="28" height="28" rx="7" fill="#07343a" stroke="#2dd4e8" stroke-width="2"/>' +
+    '<path d="M9 16l5 5 10-11" fill="none" stroke="white" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>' +
     '</svg>'
-  const dataUrl =
-    'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64')
-  return nativeImage.createFromDataURL(dataUrl).resize({ width: 16, height: 16 })
+  const fallbackUrl =
+    'data:image/svg+xml;base64,' +
+    Buffer.from(fallbackSvg).toString('base64')
+  const fallbackIcon = nativeImage.createFromDataURL(fallbackUrl)
+  if (fallbackIcon.isEmpty()) {
+    throw new Error('Tray icon and its fallback could not be loaded.')
+  }
+  return fallbackIcon
 }
 
 function createTray() {

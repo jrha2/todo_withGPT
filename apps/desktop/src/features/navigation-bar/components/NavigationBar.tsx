@@ -679,7 +679,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.0.1</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.0.2</div>
           </div>
         </div>
         <div className="navigation-header-actions">

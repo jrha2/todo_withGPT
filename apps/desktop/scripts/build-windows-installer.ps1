@@ -52,6 +52,9 @@ function Assert-AsarRenderer {
   $hasIndex = @($normalizedListing | Where-Object {
     $_ -match '^/?dist/index\.html$'
   }).Count -gt 0
+  $hasTrayIcon = @($normalizedListing | Where-Object {
+    $_ -match '^/?build/tray-icon\.png$'
+  }).Count -gt 0
   $javascriptAssets = @($normalizedListing | Where-Object {
     $_ -match '^/?dist/assets/.+\.js$'
   })
@@ -59,11 +62,11 @@ function Assert-AsarRenderer {
     $_ -match '^/?dist/assets/.+\.css$'
   })
 
-  if (-not $hasIndex -or $javascriptAssets.Count -eq 0 -or $cssAssets.Count -eq 0) {
-    throw "$Label app.asar is missing renderer payload (index=$hasIndex, js=$($javascriptAssets.Count), css=$($cssAssets.Count)): $AsarPath"
+  if (-not $hasIndex -or -not $hasTrayIcon -or $javascriptAssets.Count -eq 0 -or $cssAssets.Count -eq 0) {
+    throw "$Label app.asar is missing required payload (index=$hasIndex, trayIcon=$hasTrayIcon, js=$($javascriptAssets.Count), css=$($cssAssets.Count)): $AsarPath"
   }
 
-  Write-Host "Verified $Label app.asar renderer: index.html, $($javascriptAssets.Count) JS, $($cssAssets.Count) CSS"
+  Write-Host "Verified $Label app.asar payload: index.html, tray icon, $($javascriptAssets.Count) JS, $($cssAssets.Count) CSS"
 }
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'generate-icon.ps1')
