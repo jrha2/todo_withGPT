@@ -14,6 +14,8 @@ type SubTaskSectionProps = {
   onSortByDueDate: () => void
   onReorderSubTasks: (orderedIds: string[]) => void
   onUpdateSubTask: (subTaskId: string, field: 'title' | 'dueDate' | 'assignee' | 'assignees', value: string | string[]) => Promise<void> | void
+  showCompletedSubTasks: boolean
+  onShowCompletedSubTasksChange: (showCompleted: boolean) => void
 }
 
 function parseDate(value: string) {
@@ -22,7 +24,7 @@ function parseDate(value: string) {
   return new Date(year, month - 1, day)
 }
 
-function SubTaskSection({ taskId, subTasks, taskAssignees, onToggleSubTask, onAddSubTask, onDeleteSubTask, onSortByDueDate, onReorderSubTasks, onUpdateSubTask }: SubTaskSectionProps) {
+function SubTaskSection({ taskId, subTasks, taskAssignees, onToggleSubTask, onAddSubTask, onDeleteSubTask, onSortByDueDate, onReorderSubTasks, onUpdateSubTask, showCompletedSubTasks, onShowCompletedSubTasksChange }: SubTaskSectionProps) {
   const storageKey = `todo:drafts:subtasks:${taskId}`
   const recoveredDraft = useMemo(() => {
     try { return JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown> }
@@ -66,6 +68,10 @@ function SubTaskSection({ taskId, subTasks, taskAssignees, onToggleSubTask, onAd
     return () => setDraftDirty(dirtyKey, false)
   }, [storageKey, dueTargetId, assigneeTargetId])
   const completedCount = subTasks.filter((item) => item.completed).length
+  const incompleteCount = subTasks.length - completedCount
+  const visibleSubTasks = showCompletedSubTasks
+    ? subTasks
+    : subTasks.filter((item) => !item.completed)
   const progress = subTasks.length ? Math.round((completedCount / subTasks.length) * 100) : 0
   const deleteTarget = subTasks.find((item) => item.id === deleteTargetId) ?? null
   const dueTarget = subTasks.find((item) => item.id === dueTargetId) ?? null
@@ -155,13 +161,19 @@ function SubTaskSection({ taskId, subTasks, taskAssignees, onToggleSubTask, onAd
     setDraggedSubTaskId(null)
     setDropTargetSubTaskId(null)
     if (!sourceId || sourceId === targetId) return
-    const ids = subTasks.map((item) => item.id)
-    const sourceIndex = ids.indexOf(sourceId)
-    const targetIndex = ids.indexOf(targetId)
+    const visibleIds = visibleSubTasks.map((item) => item.id)
+    const sourceIndex = visibleIds.indexOf(sourceId)
+    const targetIndex = visibleIds.indexOf(targetId)
     if (sourceIndex < 0 || targetIndex < 0) return
-    ids.splice(sourceIndex, 1)
-    ids.splice(targetIndex, 0, sourceId)
-    onReorderSubTasks(ids)
+    visibleIds.splice(sourceIndex, 1)
+    visibleIds.splice(targetIndex, 0, sourceId)
+
+    let visibleIndex = 0
+    const orderedIds = subTasks.map((item) => {
+      if (!showCompletedSubTasks && item.completed) return item.id
+      return visibleIds[visibleIndex++]
+    })
+    onReorderSubTasks(orderedIds)
   }
 
   return (
@@ -170,9 +182,20 @@ function SubTaskSection({ taskId, subTasks, taskAssignees, onToggleSubTask, onAd
         <div><div className="section-eyebrow">CHECKLIST</div><h2>Sub Tasks <span>{completedCount}/{subTasks.length}</span></h2></div>
         <div className="subtask-progress-wrap"><span>{progress}%</span><div className="subtask-progress-track"><div className="subtask-progress-bar" style={{ width: `${progress}%` }} /></div></div>
       </div>
-      <div className="subtask-list-toolbar"><button className="subtask-due-sort-button" type="button" onClick={onSortByDueDate} disabled={subTasks.length < 2}><span>⇅</span>기한 별 정렬하기</button></div>
+      <div className="subtask-list-toolbar">
+        <button className="subtask-due-sort-button" type="button" onClick={onSortByDueDate} disabled={incompleteCount < 2}><span>⇅</span>기한 별 정렬하기</button>
+        <button
+          className={`completed-visibility-toggle ${showCompletedSubTasks ? 'is-active' : ''}`}
+          type="button"
+          aria-pressed={showCompletedSubTasks}
+          onClick={() => onShowCompletedSubTasksChange(!showCompletedSubTasks)}
+        >
+          <span aria-hidden="true">{showCompletedSubTasks ? '✓' : '○'}</span>
+          완료 Sub Task 표시
+        </button>
+      </div>
       <div className="subtask-list">
-        {subTasks.map((item) => (
+        {visibleSubTasks.map((item) => (
           <div data-search-entity="subtask" data-search-id={item.id} tabIndex={-1} className={`subtask-item ${item.completed ? 'is-completed' : ''}${draggedSubTaskId === item.id ? ' is-dragging' : ''}${dropTargetSubTaskId === item.id ? ' is-drop-target' : ''}`} key={item.id} onDragOver={(event) => { if (!draggedSubTaskId || draggedSubTaskId === item.id) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTargetSubTaskId(item.id) }} onDragLeave={() => setDropTargetSubTaskId((current) => current === item.id ? null : current)} onDrop={(event) => handleDrop(event, item.id)}>
             <div className="subtask-left">
               <span className="subtask-drag-handle" draggable role="button" tabIndex={0} title="드래그해서 순서 변경" onDragStart={(event) => handleDragStart(event, item.id)} onDragEnd={() => { setDraggedSubTaskId(null); setDropTargetSubTaskId(null) }}>⠿</span>
@@ -187,6 +210,7 @@ function SubTaskSection({ taskId, subTasks, taskAssignees, onToggleSubTask, onAd
           </div>
         ))}
         {subTasks.length === 0 && <div className="subtask-empty-state"><div className="subtask-empty-icon">✓</div><div><strong>아직 Sub Task가 없습니다</strong><span>작업을 작은 단계로 나누면 진행하기 쉬워집니다.</span></div></div>}
+        {subTasks.length > 0 && visibleSubTasks.length === 0 && <div className="subtask-empty-state"><div className="subtask-empty-icon">✓</div><div><strong>완료된 Sub Task가 숨겨져 있습니다</strong><span>완료 Sub Task 표시를 켜면 다시 확인할 수 있습니다.</span></div></div>}
       </div>
       <div className="add-subtask-row">{!isAdding ? <button type="button" onClick={() => setIsAdding(true)}><span>+</span> Sub Task 추가</button> : <div className="add-subtask-form"><input value={newTitle} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void handleSubmit(); if (event.key === 'Escape') { setIsAdding(false); setNewTitle('') } }} placeholder="새 Sub Task 제목 입력" autoFocus /><div className="add-subtask-actions"><button type="button" onClick={() => void handleSubmit()}>추가</button><button type="button" onClick={() => { setIsAdding(false); setNewTitle('') }}>취소</button></div></div>}</div>
       {editorError && !dueTarget && !assigneeTarget && <div className="task-field-error">{editorError}</div>}

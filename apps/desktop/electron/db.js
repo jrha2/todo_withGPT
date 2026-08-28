@@ -4232,6 +4232,7 @@ export function getBriefingData(days = 7, userId = '') {
       JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
       WHERE nav_node.deleted_at IS NULL
         AND sub_task.due_date IS NOT NULL
+        AND sub_task.completed = 0
         AND date(sub_task.due_date) BETWEEN date('now', 'localtime', '-' || ? || ' days')
           AND date('now', 'localtime', '+' || ? || ' days')
     )

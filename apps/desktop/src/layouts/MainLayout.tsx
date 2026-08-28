@@ -122,7 +122,10 @@ const MIN_NAVIGATION_WIDTH = 300
 const MAX_NAVIGATION_WIDTH = 520
 
 function sortSubTasks(items: SubTaskRecord[]) {
-  return [...items].sort((left, right) => {
+  const incompleteItems = items.filter((item) => !item.completed)
+  const completedItems = items.filter((item) => item.completed)
+
+  incompleteItems.sort((left, right) => {
     if (!left.dueDate && right.dueDate) return 1
     if (left.dueDate && !right.dueDate) return -1
 
@@ -135,6 +138,8 @@ function sortSubTasks(items: SubTaskRecord[]) {
     const creationOrder = left.creationOrder - right.creationOrder
     return creationOrder !== 0 ? creationOrder : left.id.localeCompare(right.id)
   })
+
+  return [...incompleteItems, ...completedItems]
 }
 
 type MainLayoutProps = {
@@ -171,8 +176,12 @@ function MainLayout({
   const [navigationSearchQuery, setNavigationSearchQuery] = useState('')
   const [navigationScope, setNavigationScope] = useState<NavigationScope>('all')
   const completedVisibilityStorageKey = `todo:preferences:show-completed-tasks:${currentUser.id}`
+  const completedSubTaskVisibilityStorageKey = `todo:preferences:show-completed-subtasks:${currentUser.id}`
   const [showCompletedTasks, setShowCompletedTasks] = useState(
     () => localStorage.getItem(completedVisibilityStorageKey) !== 'false',
+  )
+  const [showCompletedSubTasks, setShowCompletedSubTasks] = useState(
+    () => localStorage.getItem(completedSubTaskVisibilityStorageKey) !== 'false',
   )
   const [isNavigationLoading, setIsNavigationLoading] = useState(false)
   const [navigationError, setNavigationError] = useState('')
@@ -190,6 +199,13 @@ function MainLayout({
   useEffect(() => {
     localStorage.setItem(completedVisibilityStorageKey, String(showCompletedTasks))
   }, [completedVisibilityStorageKey, showCompletedTasks])
+
+  useEffect(() => {
+    localStorage.setItem(
+      completedSubTaskVisibilityStorageKey,
+      String(showCompletedSubTasks),
+    )
+  }, [completedSubTaskVisibilityStorageKey, showCompletedSubTasks])
 
   const loadTree = useCallback(async () => {
     const requestId = ++navigationRequestIdRef.current
@@ -1270,6 +1286,8 @@ function MainLayout({
                 onUpdateSubTask={handleUpdateSubTask}
                 onSortByDueDate={handleSortSubTasksByDueDate}
                 onReorderSubTasks={handleReorderSubTasks}
+                showCompletedSubTasks={showCompletedSubTasks}
+                onShowCompletedSubTasksChange={setShowCompletedSubTasks}
               />
               <MemoSection
                 key={selectedTaskId}

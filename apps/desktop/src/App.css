@@ -307,9 +307,30 @@
   color: #6b7280;
 }
 
-.subtask-item.is-completed .subtask-left span {
+.subtask-list-toolbar {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.subtask-list-toolbar .completed-visibility-toggle {
+  min-height: 28px;
+  border-radius: 4px;
+}
+
+.subtask-item.is-completed {
+  background: #f7fafb;
+}
+
+.subtask-item.is-completed:hover {
+  background: #edf4f5;
+}
+
+.subtask-item.is-completed .subtask-title-button,
+.subtask-item.is-completed .subtask-title-button:hover {
   color: #9ca3af;
   text-decoration: line-through;
+  text-decoration-color: #aeb5ba;
+  text-decoration-style: solid;
 }
 
 .add-subtask-row {
