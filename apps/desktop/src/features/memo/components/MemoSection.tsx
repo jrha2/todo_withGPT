@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RichMemoRecord } from '../../../services/api/memoApi'
+import { setDraftDirty } from '../../../services/draftRegistry'
 
 type CommentItem = {
   id: string
@@ -11,14 +12,15 @@ type CommentItem = {
 }
 
 type MemoSectionProps = {
+  taskId: string
   memos: RichMemoRecord[]
   comments: CommentItem[]
   onCreateMemo: (contentHtml: string) => Promise<void>
   onUpdateMemo: (memoId: string, contentHtml: string) => Promise<void>
   onDeleteMemo: (memoId: string) => Promise<void>
-  onAddComment: (parentId: string | null, content: string) => void
-  onEditComment: (commentId: string, nextContent: string) => void
-  onDeleteComment: (commentId: string) => void
+  onAddComment: (parentId: string | null, content: string) => Promise<void>
+  onEditComment: (commentId: string, nextContent: string) => Promise<void>
+  onDeleteComment: (commentId: string) => Promise<void>
 }
 
 type CommentNode = CommentItem & { children: CommentNode[] }
@@ -65,6 +67,7 @@ function hasMemoContent(contentHtml: string) {
 }
 
 function MemoSection({
+  taskId,
   memos,
   comments,
   onCreateMemo,
@@ -74,19 +77,53 @@ function MemoSection({
   onEditComment,
   onDeleteComment,
 }: MemoSectionProps) {
-  const [editingMemoId, setEditingMemoId] = useState<string | null>(null)
-  const [editorInitialHtml, setEditorInitialHtml] = useState('')
+  const storageKey = `todo:drafts:memo-comments:${taskId}`
+  const recoveredDraft = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown> }
+    catch { return {} }
+  }, [storageKey])
+  const [editingMemoId, setEditingMemoId] = useState<string | null>(() => typeof recoveredDraft.editingMemoId === 'string' ? recoveredDraft.editingMemoId : null)
+  const [editorInitialHtml, setEditorInitialHtml] = useState(() => typeof recoveredDraft.editorHtml === 'string' ? recoveredDraft.editorHtml : '')
   const [memoDeleteTargetId, setMemoDeleteTargetId] = useState<string | null>(null)
   const [isSavingMemo, setIsSavingMemo] = useState(false)
   const [memoError, setMemoError] = useState('')
   const memoEditorRef = useRef<HTMLDivElement | null>(null)
-  const [replyTargetId, setReplyTargetId] = useState<string | null>(null)
-  const [replyDraft, setReplyDraft] = useState('')
-  const [isRootReplyOpen, setIsRootReplyOpen] = useState(false)
-  const [newCommentDraft, setNewCommentDraft] = useState('')
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
-  const [editingCommentDraft, setEditingCommentDraft] = useState('')
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(() => typeof recoveredDraft.replyTargetId === 'string' ? recoveredDraft.replyTargetId : null)
+  const [replyDraft, setReplyDraft] = useState(() => typeof recoveredDraft.replyDraft === 'string' ? recoveredDraft.replyDraft : '')
+  const [isRootReplyOpen, setIsRootReplyOpen] = useState(() => Boolean(recoveredDraft.isRootReplyOpen))
+  const [newCommentDraft, setNewCommentDraft] = useState(() => typeof recoveredDraft.newCommentDraft === 'string' ? recoveredDraft.newCommentDraft : '')
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(() => typeof recoveredDraft.editingCommentId === 'string' ? recoveredDraft.editingCommentId : null)
+  const [editingCommentDraft, setEditingCommentDraft] = useState(() => typeof recoveredDraft.editingCommentDraft === 'string' ? recoveredDraft.editingCommentDraft : '')
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+
+  const savedEditingMemoHtml = editingMemoId && editingMemoId !== '__new__'
+    ? memos.find((memo) => memo.id === editingMemoId)?.contentHtml ?? ''
+    : ''
+  const memoHasDraft = editingMemoId === '__new__'
+    ? hasMemoContent(editorInitialHtml)
+    : Boolean(
+        editingMemoId
+        && sanitizeMemoHtml(editorInitialHtml) !== sanitizeMemoHtml(savedEditingMemoHtml),
+      )
+  const hasDraft = Boolean(memoHasDraft || replyDraft.trim() || newCommentDraft.trim() || editingCommentDraft.trim())
+  useEffect(() => {
+    if (hasDraft) {
+      localStorage.setItem(storageKey, JSON.stringify({ editingMemoId, editorHtml: editorInitialHtml, replyTargetId, replyDraft, isRootReplyOpen, newCommentDraft, editingCommentId, editingCommentDraft }))
+    } else localStorage.removeItem(storageKey)
+
+    setDraftDirty(storageKey, hasDraft, () => {
+      localStorage.removeItem(storageKey)
+      setEditingMemoId(null)
+      setEditorInitialHtml('')
+      setReplyTargetId(null)
+      setReplyDraft('')
+      setIsRootReplyOpen(false)
+      setNewCommentDraft('')
+      setEditingCommentId(null)
+      setEditingCommentDraft('')
+    })
+    return () => setDraftDirty(storageKey, false)
+  }, [storageKey, hasDraft, editingMemoId, editorInitialHtml, replyTargetId, replyDraft, isRootReplyOpen, newCommentDraft, editingCommentId, editingCommentDraft])
 
   const commentTree = useMemo(() => {
     const nodeMap = new Map<string, CommentNode>()
@@ -141,28 +178,54 @@ function MemoSection({
     }
   }
 
-  const handleReplySubmit = (parentId: string) => {
+  const handleReplySubmit = async (parentId: string) => {
     const trimmed = replyDraft.trim()
     if (!trimmed) return
-    onAddComment(parentId, trimmed)
-    setReplyTargetId(null)
-    setReplyDraft('')
+    try {
+      await onAddComment(parentId, trimmed)
+      setReplyTargetId(null)
+      setReplyDraft('')
+    } catch (error) {
+      console.error('Failed to save reply:', error)
+      setMemoError('답글을 저장하지 못했습니다. 작성 내용은 보존됩니다.')
+    }
   }
 
-  const handleNewCommentSubmit = () => {
+  const handleNewCommentSubmit = async () => {
     const trimmed = newCommentDraft.trim()
     if (!trimmed) return
-    onAddComment(null, trimmed)
-    setNewCommentDraft('')
-    setIsRootReplyOpen(false)
+    try {
+      await onAddComment(null, trimmed)
+      setNewCommentDraft('')
+      setIsRootReplyOpen(false)
+    } catch (error) {
+      console.error('Failed to save comment:', error)
+      setMemoError('댓글을 저장하지 못했습니다. 작성 내용은 보존됩니다.')
+    }
   }
 
-  const handleEditSubmit = (commentId: string) => {
+  const handleEditSubmit = async (commentId: string) => {
     const trimmed = editingCommentDraft.trim()
     if (!trimmed) return
-    onEditComment(commentId, trimmed)
-    setEditingCommentId(null)
-    setEditingCommentDraft('')
+    try {
+      await onEditComment(commentId, trimmed)
+      setEditingCommentId(null)
+      setEditingCommentDraft('')
+    } catch (error) {
+      console.error('Failed to update comment:', error)
+      setMemoError('댓글을 수정하지 못했습니다. 작성 내용은 보존됩니다.')
+    }
+  }
+
+  const handleDeleteComment = async () => {
+    if (!deleteTarget) return
+    try {
+      await onDeleteComment(deleteTarget.id)
+      setDeleteTargetId(null)
+    } catch (error) {
+      console.error('Failed to delete comment:', error)
+      setMemoError('댓글을 삭제하지 못했습니다. 다시 시도해 주세요.')
+    }
   }
 
   const renderMemoEditor = () => (
@@ -201,6 +264,7 @@ function MemoSection({
         suppressContentEditableWarning
         ref={memoEditorRef}
         dangerouslySetInnerHTML={{ __html: sanitizeMemoHtml(editorInitialHtml) }}
+        onInput={(event) => setEditorInitialHtml(event.currentTarget.innerHTML)}
         data-placeholder="메모 내용을 입력하세요."
       />
       {memoError && <div className="task-field-error">{memoError}</div>}
@@ -218,7 +282,7 @@ function MemoSection({
     const isDeleted = !!node.deleted
     return (
       <div className="comment-thread" key={node.id}>
-        <div className="comment-row" style={{ marginLeft: `${12 + depth * 28}px` }}>
+        <div className="comment-row" style={{ marginLeft: `${12 + depth * 28}px` }} data-search-entity="comment" data-search-id={node.id} tabIndex={-1}>
           <div className="comment-avatar">{node.author.charAt(0).toUpperCase()}</div>
           <div className="comment-item compact">
             <div className="comment-author"><strong>{node.author}</strong><span>{node.createdAt}</span></div>
@@ -276,7 +340,7 @@ function MemoSection({
       <div className="memo-card-list">
         {editingMemoId === '__new__' && renderMemoEditor()}
         {memos.map((memo) => (
-          <article className="memo-card-item" key={memo.id}>
+          <article className="memo-card-item" key={memo.id} data-search-entity="memo" data-search-id={memo.id} tabIndex={-1}>
             {editingMemoId === memo.id ? renderMemoEditor() : (
               <>
                 <div className="memo-card-meta">
@@ -323,7 +387,7 @@ function MemoSection({
       {memoDeleteTarget && (
         <div className="modal-backdrop"><div className="confirm-modal">
           <div className="confirm-modal-title">메모 삭제 확인</div>
-          <div className="confirm-modal-body">이 메모를 삭제하시겠습니까?</div>
+          <div className="confirm-modal-body">이 메모를 정말 삭제하시겠습니까?</div>
           <div className="confirm-modal-actions">
             <button type="button" onClick={async () => { await onDeleteMemo(memoDeleteTarget.id); setMemoDeleteTargetId(null) }}>삭제</button>
             <button type="button" onClick={() => setMemoDeleteTargetId(null)}>취소</button>
@@ -334,9 +398,9 @@ function MemoSection({
       {deleteTarget && (
         <div className="modal-backdrop"><div className="confirm-modal">
           <div className="confirm-modal-title">댓글 삭제 확인</div>
-          <div className="confirm-modal-body">이 댓글을 삭제하시겠습니까?<br />하위 답글은 유지되고, 본문만 "삭제된 댓글입니다"로 표시됩니다.</div>
+          <div className="confirm-modal-body">이 댓글을 정말 삭제하시겠습니까?<br />하위 답글은 유지되고, 본문만 "삭제된 댓글입니다"로 표시됩니다.</div>
           <div className="confirm-modal-actions">
-            <button type="button" onClick={() => { onDeleteComment(deleteTarget.id); setDeleteTargetId(null) }}>삭제</button>
+            <button type="button" onClick={() => void handleDeleteComment()}>삭제</button>
             <button type="button" onClick={() => setDeleteTargetId(null)}>취소</button>
           </div>
         </div></div>

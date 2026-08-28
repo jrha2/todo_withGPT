@@ -1,10 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import ToDoBriefing from '../features/briefing/components/ToDoBriefing'
 import MemoSection from '../features/memo/components/MemoSection'
 import NavigationBar from '../features/navigation-bar/components/NavigationBar'
 import SubTaskSection from '../features/sub-task/components/SubTaskSection'
 import TaskHeader from '../features/task/components/TaskHeader'
+import TrashView from '../features/trash/components/TrashView'
+import WorkspaceViewPanel from '../features/workspace/components/WorkspaceView'
 import type { AuthUser } from '../services/api/authApi'
+import {
+  confirmDiscardDirtyDrafts,
+  setDraftDirty,
+} from '../services/draftRegistry'
 import {
   openAttachment,
   selectAndCreateAttachment,
@@ -33,6 +45,8 @@ import {
   renameNavigationNode,
   reorderNavigationNode,
   setNavigationNodeExpanded,
+  type NavigationScope,
+  type NavigationSearchHit,
 } from '../services/api/navigationApi'
 import {
   createSubTask,
@@ -45,10 +59,19 @@ import {
 } from '../services/api/subTaskApi'
 import {
   getTaskDetail,
+  setTaskFavorite,
   toggleTaskCompleted,
+  touchTaskRecent,
   updateTaskDetail,
+  type TaskDetailChanges,
   type TaskDetailRecord,
+  type TaskPriority,
+  type WorkflowStatus,
 } from '../services/api/taskApi'
+import {
+  getWorkspaceTasks,
+  type WorkspaceView,
+} from '../services/api/workspaceApi'
 import {
   getAssigneeUsers,
   type AssigneeUser,
@@ -62,6 +85,8 @@ type NavigationNode = {
   expanded?: boolean
   order: number
   completed: boolean
+  matchKinds?: string[]
+  searchHits: NavigationSearchHit[]
 }
 
 type TaskId = string
@@ -76,6 +101,10 @@ type TaskDetail = {
   assignee: string
   assignees: AssigneeUser[]
   completed: boolean
+  priority: TaskPriority
+  workflowStatus: WorkflowStatus
+  tags: string[]
+  isFavorite: boolean
   attachments: Array<{ id: string; name: string }>
   subTasks: SubTaskRecord[]
   memos: RichMemoRecord[]
@@ -111,6 +140,8 @@ function sortSubTasks(items: SubTaskRecord[]) {
 type MainLayoutProps = {
   currentUser: AuthUser
   userRevision: number
+  remoteRefreshRevision: number | null
+  onRemoteRefreshComplete: (revision: number, succeeded: boolean) => void
   onOpenAdmin: () => void
   onLogout: () => void
 }
@@ -118,38 +149,86 @@ type MainLayoutProps = {
 function MainLayout({
   currentUser,
   userRevision,
+  remoteRefreshRevision,
+  onRemoteRefreshComplete,
   onOpenAdmin,
   onLogout,
 }: MainLayoutProps) {
   const [navigationWidth, setNavigationWidth] = useState(MIN_NAVIGATION_WIDTH)
   const [isNavigationCollapsed, setIsNavigationCollapsed] = useState(false)
-  const [selectedTaskId, setSelectedTaskId] = useState<TaskId>('task-1')
+  const [selectedTaskId, setSelectedTaskId] = useState<TaskId>('')
   const [navigationTree, setNavigationTree] = useState<NavigationNode[]>([])
   const [taskDetails, setTaskDetails] = useState<Record<string, TaskDetail>>({})
   const [assigneeUsers, setAssigneeUsers] = useState<AssigneeUser[]>([])
-  const [activeView, setActiveView] = useState<'task' | 'briefing'>('task')
+  const [activeView, setActiveView] = useState<'task' | 'briefing' | 'workspace' | 'trash'>('task')
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('today')
+  const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false)
+  const [quickCreateTitle, setQuickCreateTitle] = useState('')
+  const [quickCreateParentId, setQuickCreateParentId] = useState('root')
+  const [quickCreateError, setQuickCreateError] = useState('')
+  const [isQuickCreating, setIsQuickCreating] = useState(false)
+  const [pendingSearchHit, setPendingSearchHit] = useState<NavigationSearchHit | null>(null)
+  const [navigationSearchQuery, setNavigationSearchQuery] = useState('')
+  const [navigationScope, setNavigationScope] = useState<NavigationScope>('all')
+  const completedVisibilityStorageKey = `todo:preferences:show-completed-tasks:${currentUser.id}`
+  const [showCompletedTasks, setShowCompletedTasks] = useState(
+    () => localStorage.getItem(completedVisibilityStorageKey) !== 'false',
+  )
+  const [isNavigationLoading, setIsNavigationLoading] = useState(false)
+  const [navigationError, setNavigationError] = useState('')
+  const deferredSearchQuery = useDeferredValue(navigationSearchQuery)
+  const navigationRequestIdRef = useRef(0)
   const isDraggingRef = useRef(false)
+  const remoteRefreshStateRef = useRef<{
+    revision: number
+    shell: boolean
+    view: boolean
+    failed: boolean
+    completed: boolean
+  } | null>(null)
 
-  const loadTree = async () => {
+  useEffect(() => {
+    localStorage.setItem(completedVisibilityStorageKey, String(showCompletedTasks))
+  }, [completedVisibilityStorageKey, showCompletedTasks])
+
+  const loadTree = useCallback(async () => {
+    const requestId = ++navigationRequestIdRef.current
+    setIsNavigationLoading(true)
+    setNavigationError('')
+
     try {
-      const tree = await getNavigationTree()
+      const tree = await getNavigationTree({
+        query: deferredSearchQuery,
+        scope: navigationScope,
+      })
+      if (requestId !== navigationRequestIdRef.current) return
+
       const navigationNodes = tree as NavigationNode[]
       setNavigationTree(navigationNodes)
       setSelectedTaskId((currentTaskId) => {
-        const currentTaskExists = navigationNodes.some(
-          (node) => node.id === currentTaskId && node.type === 'task',
-        )
-
-        if (currentTaskExists) {
+        // Search/scope filtering may hide the open Task. Keep the editor mounted so
+        // filtering cannot discard an in-progress draft.
+        if (currentTaskId) {
           return currentTaskId
         }
 
-        return navigationNodes.find((node) => node.type === 'task')?.id ?? ''
+        return navigationNodes.find((node) => (
+          node.type === 'task'
+          && (showCompletedTasks || !node.completed)
+        ))?.id ?? ''
       })
+      return navigationNodes
     } catch (error) {
+      if (requestId !== navigationRequestIdRef.current) return
       console.error('Failed to load navigation tree from DB:', error)
+      setNavigationError('업무 목록을 불러오지 못했습니다.')
+      return null
+    } finally {
+      if (requestId === navigationRequestIdRef.current) {
+        setIsNavigationLoading(false)
+      }
     }
-  }
+  }, [deferredSearchQuery, navigationScope, showCompletedTasks])
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -179,6 +258,7 @@ function MainLayout({
 
   useEffect(() => {
     return window.api.app.onSelectTask((taskId) => {
+      if (!confirmDiscardDirtyDrafts()) return
       setSelectedTaskId(taskId)
       setActiveView('task')
     })
@@ -186,6 +266,7 @@ function MainLayout({
 
   useEffect(() => {
     return window.api.app.onOpenBriefing(() => {
+      if (!confirmDiscardDirtyDrafts()) return
       setActiveView('briefing')
     })
   }, [])
@@ -207,10 +288,10 @@ function MainLayout({
   }, [])
 
   useEffect(() => {
-    // The initial tree is loaded from the external server after mount.
+    // Reload server-backed navigation whenever a remote revision is applied.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadTree()
-  }, [])
+  }, [loadTree, userRevision])
 
   useEffect(() => {
     getAssigneeUsers()
@@ -220,64 +301,153 @@ function MainLayout({
       })
   }, [userRevision])
 
-  useEffect(() => {
-    const selectedNode = navigationTree.find((node) => node.id === selectedTaskId)
+  const loadSelectedTask = useCallback(async (
+    taskId = selectedTaskId,
+    tree = navigationTree,
+    isCancelled: () => boolean = () => false,
+  ) => {
+    const selectedNode = tree.find((node) => node.id === taskId)
+    if (!selectedNode || selectedNode.type !== 'task') return false
 
-    if (!selectedNode || selectedNode.type !== 'task') {
-      return
-    }
+    try {
+      const [taskDetail, subTasks, memos, comments, favoriteTasks] = await Promise.all([
+        getTaskDetail(taskId),
+        getSubTasks(taskId),
+        getMemos(taskId),
+        getComments(taskId),
+        getWorkspaceTasks('favorites'),
+      ])
+      if (isCancelled()) return false
 
-    let cancelled = false
+      const parentNode = selectedNode.parentId
+        ? tree.find((node) => node.id === selectedNode.parentId)
+        : null
+      const taskPath = parentNode
+        ? `${parentNode.title} > ${taskDetail.title}`
+        : taskDetail.title
 
-    const loadTaskContent = async () => {
-      try {
-        const [taskDetail, subTasks, memos, comments] = await Promise.all([
-          getTaskDetail(selectedTaskId),
-          getSubTasks(selectedTaskId),
-          getMemos(selectedTaskId),
-          getComments(selectedTaskId),
-        ])
-
-        if (cancelled) {
-          return
-        }
-
-        const parentNode = selectedNode.parentId
-          ? navigationTree.find((node) => node.id === selectedNode.parentId)
-          : null
-        const taskPath = parentNode
-          ? `${parentNode.title} > ${taskDetail.title}`
-          : taskDetail.title
-
-        setTaskDetails({
-          [selectedTaskId]: {
-            id: taskDetail.id,
-            navNodeId: taskDetail.navNodeId,
-            path: taskPath,
-            title: taskDetail.title,
-            description: taskDetail.description,
-            dueDate: taskDetail.dueDate,
-            alarm: taskDetail.alarm,
-            assignee: taskDetail.assignee,
-            assignees: taskDetail.assignees,
-            completed: taskDetail.completed,
-            attachments: taskDetail.attachments,
-            subTasks,
-            memos,
-            comments,
-          },
-        })
-      } catch (error) {
-        console.error('Failed to load Task content from DB:', error)
-      }
-    }
-
-    loadTaskContent()
-
-    return () => {
-      cancelled = true
+      setTaskDetails({
+        [taskId]: {
+          id: taskDetail.id,
+          navNodeId: taskDetail.navNodeId,
+          path: taskPath,
+          title: taskDetail.title,
+          description: taskDetail.description,
+          dueDate: taskDetail.dueDate,
+          alarm: taskDetail.alarm,
+          assignee: taskDetail.assignee,
+          assignees: taskDetail.assignees,
+          completed: taskDetail.completed,
+          priority: taskDetail.priority,
+          workflowStatus: taskDetail.workflowStatus,
+          tags: taskDetail.tags,
+          isFavorite: favoriteTasks.some((task) => task.taskId === taskId),
+          attachments: taskDetail.attachments,
+          subTasks,
+          memos,
+          comments,
+        },
+      })
+      void touchTaskRecent(taskId).catch((error) => {
+        console.error('Failed to update recent Task state:', error)
+      })
+      return true
+    } catch (error) {
+      console.error('Failed to load Task content from DB:', error)
+      return false
     }
   }, [selectedTaskId, navigationTree])
+
+  useEffect(() => {
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadSelectedTask(selectedTaskId, navigationTree, () => cancelled)
+    return () => { cancelled = true }
+  }, [loadSelectedTask, selectedTaskId, navigationTree])
+
+  useEffect(() => {
+    if (remoteRefreshRevision) {
+      remoteRefreshStateRef.current = {
+        revision: remoteRefreshRevision,
+        shell: false,
+        view: false,
+        failed: false,
+        completed: false,
+      }
+    } else {
+      remoteRefreshStateRef.current = null
+    }
+  }, [remoteRefreshRevision])
+
+  const reportRemoteRefreshPart = useCallback((
+    revision: number,
+    part: 'shell' | 'view',
+    succeeded: boolean,
+  ) => {
+    const state = remoteRefreshStateRef.current
+    if (!state || state.revision !== revision || state.completed) return
+    if (!succeeded) {
+      state.failed = true
+      state.completed = true
+      onRemoteRefreshComplete(revision, false)
+      return
+    }
+    state[part] = true
+    if (state.shell && state.view) {
+      state.completed = true
+      onRemoteRefreshComplete(revision, true)
+    }
+  }, [onRemoteRefreshComplete])
+
+  const handleChildRemoteRefresh = useCallback((revision: number, succeeded: boolean) => {
+    reportRemoteRefreshPart(revision, 'view', succeeded)
+  }, [reportRemoteRefreshPart])
+
+  useEffect(() => {
+    if (!remoteRefreshRevision) return
+    let cancelled = false
+    const refreshShell = async () => {
+      const freshTree = await loadTree()
+      if (!freshTree || cancelled) {
+        if (!cancelled) reportRemoteRefreshPart(remoteRefreshRevision, 'shell', false)
+        return
+      }
+      try {
+        const users = await getAssigneeUsers()
+        if (cancelled) return
+        setAssigneeUsers(users)
+        if (activeView === 'task') {
+          const refreshTaskId = freshTree.some((node) => (
+            node.id === selectedTaskId
+            && node.type === 'task'
+            && (showCompletedTasks || !node.completed)
+          ))
+            ? selectedTaskId
+            : freshTree.find((node) => (
+                node.type === 'task'
+                && (showCompletedTasks || !node.completed)
+              ))?.id ?? ''
+          if (refreshTaskId !== selectedTaskId) {
+            setSelectedTaskId(refreshTaskId)
+            setTaskDetails({})
+          }
+          const detailSucceeded = refreshTaskId
+            ? await loadSelectedTask(refreshTaskId, freshTree, () => cancelled)
+            : true
+          if (cancelled) return
+          reportRemoteRefreshPart(remoteRefreshRevision, 'view', detailSucceeded)
+        }
+        reportRemoteRefreshPart(remoteRefreshRevision, 'shell', true)
+      } catch (error) {
+        console.error('Failed to refresh renderer after remote change:', error)
+        if (!cancelled) reportRemoteRefreshPart(remoteRefreshRevision, 'shell', false)
+      }
+    }
+    void refreshShell()
+    return () => { cancelled = true }
+  // A remote revision owns this transaction; child views report their own fetch result.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteRefreshRevision])
 
   const handleResizeMouseDown = () => {
     isDraggingRef.current = true
@@ -436,6 +606,10 @@ function MainLayout({
       assignee: detail.assignee,
       assignees: detail.assignees,
       completed: detail.completed,
+      priority: detail.priority,
+      workflowStatus: detail.workflowStatus,
+      tags: detail.tags,
+      isFavorite: false,
       attachments: detail.attachments,
       subTasks: [],
       memos: [],
@@ -750,150 +924,217 @@ function MainLayout({
     await openAttachment(attachmentId)
   }
 
-  const handleToggleTaskCompleted = async () => {
-    const updatedTask = await toggleTaskCompleted(selectedTaskId)
-
-    setTaskDetails((prev) => {
-      const currentTask = prev[selectedTaskId]
-
-      if (!currentTask) {
-        return prev
-      }
-
-      return {
-        ...prev,
-        [selectedTaskId]: {
-          ...currentTask,
-          completed: updatedTask.completed,
-        },
-      }
-    })
-
-    setNavigationTree((prev) =>
-      prev.map((node) =>
-        node.id === selectedTaskId
-          ? { ...node, completed: updatedTask.completed }
-          : node,
-      ),
-    )
-  }
-
-  const handleUpdateTaskField = async (
-    field: 'dueDate' | 'alarm',
-    value: string,
-  ) => {
-    const currentTask = taskDetails[selectedTaskId]
-
-    if (!currentTask) {
-      return
-    }
-
-    const updatedTask = await updateTaskDetail(selectedTaskId, {
-      title: currentTask.title,
-      description: currentTask.description,
-      dueDate: field === 'dueDate' ? value : currentTask.dueDate,
-      alarm: field === 'alarm' ? value : currentTask.alarm,
-      assignee: currentTask.assignee,
-      assigneeIds: currentTask.assignees.map((assignee) => assignee.id),
-      manualAssigneeNames: [],
-    })
-
-    setTaskDetails((prev) => {
-      const currentTask = prev[selectedTaskId]
-
-      if (!currentTask) {
-        return prev
-      }
-
-      return {
-        ...prev,
-        [selectedTaskId]: {
-          ...currentTask,
-          dueDate: updatedTask.dueDate,
-          alarm: updatedTask.alarm,
-          assignee: updatedTask.assignee,
-          assignees: updatedTask.assignees,
-        },
-      }
-    })
-
-  }
-
-  const handleUpdateTaskTitle = async (title: string) => {
-    const currentTask = taskDetails[selectedTaskId]
-    if (!currentTask) return
-
-    const updatedTask = await updateTaskDetail(selectedTaskId, {
-      title,
-      description: currentTask.description,
-      dueDate: currentTask.dueDate,
-      alarm: currentTask.alarm,
-      assignee: currentTask.assignee,
-      assigneeIds: currentTask.assignees.map((assignee) => assignee.id),
-      manualAssigneeNames: [],
-    })
-
+  const applyUpdatedTask = (updatedTask: TaskDetailRecord) => {
     const selectedNode = navigationTree.find((node) => node.id === selectedTaskId)
     const parentNode = selectedNode?.parentId
       ? navigationTree.find((node) => node.id === selectedNode.parentId)
       : null
     const path = parentNode ? `${parentNode.title} > ${updatedTask.title}` : updatedTask.title
 
-    setTaskDetails((prev) => ({
-      ...prev,
-      [selectedTaskId]: {
-        ...prev[selectedTaskId],
-        title: updatedTask.title,
-        path,
-      },
-    }))
-    setNavigationTree((prev) =>
-      prev.map((node) =>
-        node.id === selectedTaskId ? { ...node, title: updatedTask.title } : node,
-      ),
-    )
+    setTaskDetails((prev) => {
+      const currentTask = prev[selectedTaskId]
+      if (!currentTask) return prev
+      return {
+        ...prev,
+        [selectedTaskId]: {
+          ...currentTask,
+          ...updatedTask,
+          path,
+        },
+      }
+    })
+    setNavigationTree((prev) => prev.map((node) =>
+      node.id === selectedTaskId
+        ? { ...node, title: updatedTask.title, completed: updatedTask.completed }
+        : node,
+    ))
   }
 
-  const handleUpdateTaskAssignees = async (
-    assigneeIds: string[],
-    manualAssigneeNames: string[],
-  ) => {
+  const selectNextIncompleteTask = (hiddenTaskId: string) => {
+    const hiddenNode = navigationTree.find((node) => node.id === hiddenTaskId)
+    const nextTask = navigationTree
+      .filter((node) => (
+        node.type === 'task'
+        && node.id !== hiddenTaskId
+        && !node.completed
+      ))
+      .sort((left, right) => {
+        const leftSameFolder = left.parentId === hiddenNode?.parentId ? 0 : 1
+        const rightSameFolder = right.parentId === hiddenNode?.parentId ? 0 : 1
+        return leftSameFolder - rightSameFolder || left.order - right.order
+      })[0]
+
+    setTaskDetails({})
+    setSelectedTaskId(nextTask?.id ?? '')
+  }
+
+  const handleShowCompletedTasksChange = (showCompleted: boolean) => {
+    if (showCompleted === showCompletedTasks) return
+
     const currentTask = taskDetails[selectedTaskId]
-    if (!currentTask) {
-      return
+    const currentNode = navigationTree.find((node) => node.id === selectedTaskId)
+    if (
+      !showCompleted
+      && activeView === 'task'
+      && (currentTask?.completed || currentNode?.completed)
+    ) {
+      if (!confirmDiscardDirtyDrafts(
+        '현재 완료된 Task가 숨겨집니다. 저장하지 않은 변경사항을 버리고 완료 Task를 숨기시겠습니까?',
+      )) return
+      selectNextIncompleteTask(selectedTaskId)
     }
 
-    const updatedTask = await updateTaskDetail(selectedTaskId, {
-      title: currentTask.title,
-      description: currentTask.description,
-      dueDate: currentTask.dueDate,
-      alarm: currentTask.alarm,
-      assignee: currentTask.assignee,
-      assigneeIds,
-      manualAssigneeNames,
-    })
+    setShowCompletedTasks(showCompleted)
+  }
 
+  const handleToggleTaskCompleted = async () => {
+    const currentTask = taskDetails[selectedTaskId]
+    const willComplete = !currentTask?.completed
+    if (
+      !showCompletedTasks
+      && willComplete
+      && !confirmDiscardDirtyDrafts(
+        '완료 처리하면 이 Task가 숨겨집니다. 저장하지 않은 변경사항을 버리고 완료 처리하시겠습니까?',
+      )
+    ) return
+
+    const updatedTask = await toggleTaskCompleted(selectedTaskId)
+    applyUpdatedTask(updatedTask)
+    if (!showCompletedTasks && updatedTask.completed) {
+      selectNextIncompleteTask(selectedTaskId)
+    }
+  }
+
+  const handleUpdateTask = async (changes: TaskDetailChanges) => {
+    const currentTask = taskDetails[selectedTaskId]
+    const willComplete = changes.completed === true || changes.workflowStatus === 'done'
+    if (
+      !showCompletedTasks
+      && !currentTask?.completed
+      && willComplete
+      && !confirmDiscardDirtyDrafts(
+        '완료 상태로 변경하면 이 Task가 숨겨집니다. 저장하지 않은 변경사항을 버리고 계속하시겠습니까?',
+      )
+    ) return
+
+    const updatedTask = await updateTaskDetail(selectedTaskId, changes)
+    applyUpdatedTask(updatedTask)
+    if (!showCompletedTasks && updatedTask.completed) {
+      selectNextIncompleteTask(selectedTaskId)
+    }
+    if (Object.hasOwn(changes, 'assigneeIds')) {
+      setAssigneeUsers(await getAssigneeUsers())
+      await loadTree()
+    }
+  }
+
+  const handleUpdateTaskField = async (field: 'dueDate' | 'alarm', value: string) => {
+    await handleUpdateTask({ [field]: value })
+  }
+
+  const handleUpdateTaskTitle = async (title: string) => {
+    await handleUpdateTask({ title })
+  }
+
+  const handleUpdateTaskAssignees = async (assigneeIds: string[]) => {
+    await handleUpdateTask({ assigneeIds })
+  }
+
+  const handleToggleFavorite = async () => {
+    const currentTask = taskDetails[selectedTaskId]
+    if (!currentTask) return
+    const state = await setTaskFavorite(selectedTaskId, !currentTask.isFavorite) as { isFavorite: boolean }
     setTaskDetails((prev) => ({
       ...prev,
-      [selectedTaskId]: {
-        ...prev[selectedTaskId],
-        assignee: updatedTask.assignee,
-        assignees: updatedTask.assignees,
-      },
+      [selectedTaskId]: { ...prev[selectedTaskId], isFavorite: state.isFavorite },
     }))
-    setAssigneeUsers(await getAssigneeUsers())
   }
 
   const selectedTaskDetail = taskDetails[selectedTaskId]
   const handleSelectTask = (taskId: string) => {
-    if (taskId !== selectedTaskId) {
-      setTaskDetails({})
-    }
+    if (taskId !== selectedTaskId && !confirmDiscardDirtyDrafts()) return
+    if (taskId !== selectedTaskId) setTaskDetails({})
     setSelectedTaskId(taskId)
     setActiveView('task')
   }
 
+  const handleOpenView = (view: 'briefing' | 'workspace' | 'trash', smartView?: WorkspaceView) => {
+    if (!confirmDiscardDirtyDrafts()) return
+    if (smartView) setWorkspaceView(smartView)
+    setActiveView(view)
+  }
+
+  const handleOpenSearchHit = (hit: NavigationSearchHit) => {
+    if (!hit.taskId || !confirmDiscardDirtyDrafts()) return
+    setTaskDetails({})
+    setSelectedTaskId(hit.taskId)
+    setPendingSearchHit(hit)
+    setActiveView('task')
+  }
+
+  useEffect(() => {
+    if (!pendingSearchHit || !selectedTaskDetail || pendingSearchHit.taskId !== selectedTaskId) return
+    const timer = window.setTimeout(() => {
+      const exactSelector = `[data-search-entity="${CSS.escape(pendingSearchHit.entityType)}"][data-search-id="${CSS.escape(pendingSearchHit.entityId)}"]`
+      const fallbackSelector = `[data-search-entity="${CSS.escape(pendingSearchHit.entityType)}"]`
+      const target = document.querySelector<HTMLElement>(exactSelector)
+        ?? document.querySelector<HTMLElement>(fallbackSelector)
+      if (!target) return
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      target.focus({ preventScroll: true })
+      target.classList.add('is-search-target-highlight')
+      window.setTimeout(() => target.classList.remove('is-search-target-highlight'), 2400)
+      setPendingSearchHit(null)
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [pendingSearchHit, selectedTaskDetail, selectedTaskId])
+
+  useEffect(() => {
+    const handleQuickCreateShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'n') return
+      event.preventDefault()
+      if (!confirmDiscardDirtyDrafts('저장하지 않은 변경사항이 있습니다. 변경사항을 버리고 새 Task를 등록하시겠습니까?')) return
+      setQuickCreateError('')
+      setIsQuickCreateOpen(true)
+    }
+    window.addEventListener('keydown', handleQuickCreateShortcut)
+    return () => window.removeEventListener('keydown', handleQuickCreateShortcut)
+  }, [])
+
+  useEffect(() => {
+    const dirty = isQuickCreateOpen && Boolean(quickCreateTitle.trim())
+    setDraftDirty('quick-create-task', dirty, () => {
+      setQuickCreateTitle('')
+      setQuickCreateParentId('root')
+      setQuickCreateError('')
+      setIsQuickCreateOpen(false)
+    })
+    return () => setDraftDirty('quick-create-task', false)
+  }, [isQuickCreateOpen, quickCreateTitle])
+
+  const handleQuickCreate = async () => {
+    const title = quickCreateTitle.trim()
+    if (!title) {
+      setQuickCreateError('Task 제목을 입력해 주세요.')
+      return
+    }
+    setIsQuickCreating(true)
+    setQuickCreateError('')
+    try {
+      await handleCreateTask(title, quickCreateParentId === 'root' ? null : quickCreateParentId)
+      setQuickCreateTitle('')
+      setQuickCreateParentId('root')
+      setIsQuickCreateOpen(false)
+    } catch (error) {
+      console.error('Failed to quick-create Task:', error)
+      setQuickCreateError('Task를 등록하지 못했습니다. 다시 시도해 주세요.')
+    } finally {
+      setIsQuickCreating(false)
+    }
+  }
+
   return (
+    <>
     <div
       className={`app-shell ${isNavigationCollapsed ? 'is-navigation-collapsed' : ''}`}
       style={{
@@ -908,8 +1149,21 @@ function MainLayout({
         onLogout={onLogout}
         onCollapse={() => setIsNavigationCollapsed(true)}
         isBriefingActive={activeView === 'briefing'}
-        onOpenBriefing={() => setActiveView('briefing')}
+        onOpenBriefing={() => handleOpenView('briefing')}
+        activeSmartView={activeView === 'workspace' ? workspaceView : null}
+        onOpenSmartView={(view) => handleOpenView('workspace', view)}
+        isTrashActive={activeView === 'trash'}
+        onOpenTrash={() => handleOpenView('trash')}
+        onOpenSearchHit={handleOpenSearchHit}
         tree={navigationTree}
+        searchQuery={navigationSearchQuery}
+        onSearchQueryChange={setNavigationSearchQuery}
+        navigationScope={navigationScope}
+        onNavigationScopeChange={setNavigationScope}
+        showCompletedTasks={showCompletedTasks}
+        onShowCompletedTasksChange={handleShowCompletedTasksChange}
+        isNavigationLoading={isNavigationLoading}
+        navigationError={navigationError}
         selectedTaskId={selectedTaskId}
         onSelectTask={handleSelectTask}
         onToggleFolder={handleToggleFolder}
@@ -951,7 +1205,11 @@ function MainLayout({
       <main className="detail-screen">
         <div className="detail-content">
           {activeView === 'briefing' ? (
-            <ToDoBriefing onOpenTask={handleSelectTask} />
+            <ToDoBriefing key={userRevision} onOpenTask={handleSelectTask} remoteRefreshRevision={remoteRefreshRevision} onRemoteRefreshComplete={handleChildRemoteRefresh} />
+          ) : activeView === 'workspace' ? (
+            <WorkspaceViewPanel initialView={workspaceView} revision={userRevision} remoteRefreshRevision={remoteRefreshRevision} onRemoteRefreshComplete={handleChildRemoteRefresh} onOpenTask={handleSelectTask} onViewChange={setWorkspaceView} showCompletedTasks={showCompletedTasks} onShowCompletedTasksChange={handleShowCompletedTasksChange} />
+          ) : activeView === 'trash' ? (
+            <TrashView revision={userRevision} remoteRefreshRevision={remoteRefreshRevision} onRemoteRefreshComplete={handleChildRemoteRefresh} onTreeChanged={async () => { await loadTree() }} />
           ) : selectedTaskDetail ? (
             <section
               key={selectedTaskId}
@@ -964,9 +1222,11 @@ function MainLayout({
                 onAddAttachment={handleAddAttachment}
                 onOpenAttachment={handleOpenAttachment}
                 onToggleCompleted={handleToggleTaskCompleted}
+                onToggleFavorite={handleToggleFavorite}
                 onUpdateTitle={handleUpdateTaskTitle}
                 onUpdateField={handleUpdateTaskField}
                 onUpdateAssignees={handleUpdateTaskAssignees}
+                onUpdateTask={handleUpdateTask}
               />
               <section className="content-card detail-task-list-card">
                 <div className="detail-task-list-heading">
@@ -974,6 +1234,7 @@ function MainLayout({
                   <small>
                     {navigationTree.filter((node) =>
                       node.type === 'task' &&
+                      (showCompletedTasks || !node.completed) &&
                       node.parentId === navigationTree.find((item) => item.id === selectedTaskId)?.parentId
                     ).length}개
                   </small>
@@ -982,6 +1243,7 @@ function MainLayout({
                   {navigationTree
                     .filter((node) =>
                       node.type === 'task' &&
+                      (showCompletedTasks || !node.completed) &&
                       node.parentId === navigationTree.find((item) => item.id === selectedTaskId)?.parentId
                     )
                     .sort((left, right) => left.order - right.order)
@@ -999,6 +1261,7 @@ function MainLayout({
                 </div>
               </section>
               <SubTaskSection
+                taskId={selectedTaskId}
                 subTasks={selectedTaskDetail.subTasks}
                 taskAssignees={selectedTaskDetail.assignees}
                 onToggleSubTask={handleToggleSubTask}
@@ -1010,6 +1273,7 @@ function MainLayout({
               />
               <MemoSection
                 key={selectedTaskId}
+                taskId={selectedTaskId}
                 memos={selectedTaskDetail.memos}
                 comments={selectedTaskDetail.comments}
                 onCreateMemo={handleCreateMemo}
@@ -1030,6 +1294,18 @@ function MainLayout({
         </div>
       </main>
     </div>
+    {isQuickCreateOpen && (
+      <div className="modal-backdrop">
+        <div className="quick-create-modal">
+          <div className="task-field-modal-header"><div><span>CTRL + N</span><h3>빠른 Task 등록</h3></div><button type="button" onClick={() => setIsQuickCreateOpen(false)}>×</button></div>
+          <label>Task 제목<input autoFocus value={quickCreateTitle} onChange={(event) => setQuickCreateTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void handleQuickCreate(); if (event.key === 'Escape') setIsQuickCreateOpen(false) }} placeholder="새 Task 제목" /></label>
+          <label>폴더<select value={quickCreateParentId} onChange={(event) => setQuickCreateParentId(event.target.value)}><option value="root">최상위</option>{navigationTree.filter((node) => node.type === 'folder').map((folder) => <option key={folder.id} value={folder.id}>{folder.title}</option>)}</select></label>
+          {quickCreateError && <div className="task-field-error" role="alert">{quickCreateError}</div>}
+          <div className="confirm-modal-actions"><button type="button" disabled={isQuickCreating} onClick={() => void handleQuickCreate()}>{isQuickCreating ? '등록 중...' : '등록'}</button><button type="button" disabled={isQuickCreating} onClick={() => setIsQuickCreateOpen(false)}>취소</button></div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
 

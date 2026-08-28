@@ -1,5 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type {
+  TaskDetailChanges,
+  TaskPriority,
+  WorkflowStatus,
+} from '../../../services/api/taskApi'
 import type { AssigneeUser } from '../../../services/api/userApi'
+import { setDraftDirty } from '../../../services/draftRegistry'
 
 type Attachment = {
   id: string
@@ -7,6 +13,7 @@ type Attachment = {
 }
 
 type TaskDetail = {
+  id: string
   path: string
   title: string
   description: string
@@ -15,6 +22,10 @@ type TaskDetail = {
   assignee: string
   assignees: AssigneeUser[]
   completed: boolean
+  priority: TaskPriority
+  workflowStatus: WorkflowStatus
+  tags: string[]
+  isFavorite: boolean
   attachments: Attachment[]
 }
 
@@ -38,12 +49,11 @@ type TaskHeaderProps = {
   onAddAttachment: () => void
   onOpenAttachment: (attachmentId: string) => void
   onToggleCompleted: () => void
+  onToggleFavorite: () => Promise<void>
   onUpdateTitle: (title: string) => Promise<void>
   onUpdateField: (field: EditableField, value: string) => Promise<void>
-  onUpdateAssignees: (
-    assigneeIds: string[],
-    manualAssigneeNames: string[],
-  ) => Promise<void>
+  onUpdateAssignees: (assigneeIds: string[]) => Promise<void>
+  onUpdateTask: (changes: TaskDetailChanges) => Promise<void>
 }
 
 const weekdays = ['일', '월', '화', '수', '목', '금', '토']
@@ -183,13 +193,19 @@ function TaskHeader({
   onAddAttachment,
   onOpenAttachment,
   onToggleCompleted,
+  onToggleFavorite,
   onUpdateTitle,
   onUpdateField,
   onUpdateAssignees,
+  onUpdateTask,
 }: TaskHeaderProps) {
   const [activeEditor, setActiveEditor] = useState<ActiveEditor>(null)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState(taskDetail.title)
+  const [isEditingDescription, setIsEditingDescription] = useState(false)
+  const [descriptionDraft, setDescriptionDraft] = useState(taskDetail.description)
+  const [isEditingTags, setIsEditingTags] = useState(false)
+  const [tagsDraft, setTagsDraft] = useState(taskDetail.tags.join(', '))
   const [isSaving, setIsSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [dueDateDraft, setDueDateDraft] = useState(taskDetail.dueDate)
@@ -198,8 +214,6 @@ function TaskHeader({
     new Date(initialDueDate.getFullYear(), initialDueDate.getMonth(), 1),
   )
   const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([])
-  const [manualAssigneeNames, setManualAssigneeNames] = useState<string[]>([])
-  const [manualAssigneeDraft, setManualAssigneeDraft] = useState('')
   const initialAlarm = parseAlarm(taskDetail.alarm)
   const [alarmDate, setAlarmDate] = useState(formatDateOnly(initialAlarm))
   const [alarmHour, setAlarmHour] = useState(initialAlarm.getHours())
@@ -212,6 +226,78 @@ function TaskHeader({
   const assigneeInitial =
     taskDetail.assignees[0]?.name.trim().charAt(0).toUpperCase() || 'U'
   const selectedClockHour = alarmHour % 12 || 12
+
+  useEffect(() => {
+    const dirty = isEditingTitle && titleDraft.trim() !== taskDetail.title
+    setDraftDirty(`task-title:${taskDetail.id}`, dirty, () => {
+      setTitleDraft(taskDetail.title)
+      setIsEditingTitle(false)
+    })
+    return () => setDraftDirty(`task-title:${taskDetail.id}`, false)
+  }, [isEditingTitle, titleDraft, taskDetail.id, taskDetail.title])
+
+  useEffect(() => {
+    const dirty = (isEditingDescription && descriptionDraft !== taskDetail.description)
+      || (isEditingTags && tagsDraft !== taskDetail.tags.join(', '))
+    setDraftDirty(`task-metadata:${taskDetail.id}`, dirty, () => {
+      setDescriptionDraft(taskDetail.description)
+      setTagsDraft(taskDetail.tags.join(', '))
+      setIsEditingDescription(false)
+      setIsEditingTags(false)
+    })
+    return () => setDraftDirty(`task-metadata:${taskDetail.id}`, false)
+  }, [isEditingDescription, descriptionDraft, isEditingTags, tagsDraft, taskDetail])
+
+  useEffect(() => {
+    const dirty = activeEditor !== null
+    setDraftDirty(`task-field:${taskDetail.id}`, dirty, () => {
+      setActiveEditor(null)
+      setErrorMessage('')
+    })
+    return () => setDraftDirty(`task-field:${taskDetail.id}`, false)
+  }, [activeEditor, taskDetail.id])
+
+  const saveTaskChanges = async (changes: TaskDetailChanges) => {
+    setIsSaving(true)
+    setErrorMessage('')
+    try { await onUpdateTask(changes) }
+    catch (error) {
+      console.error('Failed to update Task metadata:', error)
+      setErrorMessage('Task 정보를 저장하지 못했습니다. 다시 시도해 주세요.')
+      throw error
+    } finally { setIsSaving(false) }
+  }
+
+  const toggleFavorite = async () => {
+    setIsSaving(true)
+    setErrorMessage('')
+    try {
+      await onToggleFavorite()
+    } catch (error) {
+      console.error('Failed to update favorite state:', error)
+      setErrorMessage('즐겨찾기 상태를 저장하지 못했습니다. 다시 시도해 주세요.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const saveDescription = async () => {
+    try {
+      await saveTaskChanges({ description: descriptionDraft.trim() })
+      setIsEditingDescription(false)
+      setDraftDirty(`task-metadata:${taskDetail.id}`, false)
+    } catch { /* draft and dirty state are intentionally preserved */ }
+  }
+
+  const saveTags = async () => {
+    const tags = [...new Set(tagsDraft.split(',').map((tag) => tag.trim()).filter(Boolean))]
+    try {
+      await saveTaskChanges({ tags })
+      setTagsDraft(tags.join(', '))
+      setIsEditingTags(false)
+      setDraftDirty(`task-metadata:${taskDetail.id}`, false)
+    } catch { /* draft and dirty state are intentionally preserved */ }
+  }
 
   const saveTitle = async () => {
     const nextTitle = titleDraft.trim()
@@ -257,12 +343,6 @@ function TaskHeader({
         .filter((assignee) => selectableIds.has(assignee.id))
         .map((assignee) => assignee.id),
     )
-    setManualAssigneeNames(
-      taskDetail.assignees
-        .filter((assignee) => !selectableIds.has(assignee.id))
-        .map((assignee) => assignee.name),
-    )
-    setManualAssigneeDraft('')
     setErrorMessage('')
     setActiveEditor('assignee')
   }
@@ -325,7 +405,7 @@ function TaskHeader({
     setIsSaving(true)
     setErrorMessage('')
     try {
-      await onUpdateAssignees(selectedAssigneeIds, manualAssigneeNames)
+      await onUpdateAssignees(selectedAssigneeIds)
       setActiveEditor(null)
     } catch (error) {
       console.error('Failed to update Task assignees:', error)
@@ -341,29 +421,6 @@ function TaskHeader({
         ? current.filter((id) => id !== userId)
         : [...current, userId],
     )
-  }
-
-  const addManualAssignee = () => {
-    const name = manualAssigneeDraft.trim()
-    if (!name) {
-      return
-    }
-
-    const listedUser = assigneeUsers.find(
-      (user) => user.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
-    )
-    if (listedUser) {
-      setSelectedAssigneeIds((current) =>
-        current.includes(listedUser.id) ? current : [...current, listedUser.id],
-      )
-    } else {
-      setManualAssigneeNames((current) =>
-        current.some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase())
-          ? current
-          : [...current, name],
-      )
-    }
-    setManualAssigneeDraft('')
   }
 
   const saveAlarm = () => {
@@ -451,6 +508,7 @@ function TaskHeader({
     <header className={`detail-header ${taskDetail.completed ? 'is-completed' : ''}`}>
       <div className="detail-toolbar">
         <p className="detail-path">{taskDetail.path.replace(' > ', '  /  ')}</p>
+        <button className={`favorite-toggle ${taskDetail.isFavorite ? 'is-active' : ''}`} type="button" aria-pressed={taskDetail.isFavorite} disabled={isSaving} onClick={() => void toggleFavorite()}>{taskDetail.isFavorite ? '★ 즐겨찾기' : '☆ 즐겨찾기'}</button>
       </div>
 
       <div className="detail-header-top">
@@ -480,6 +538,8 @@ function TaskHeader({
           {isEditingTitle ? (
             <input
               className="task-title-editor detail-title-editor"
+              data-search-entity="task"
+              data-search-id={taskDetail.id}
               value={titleDraft}
               onChange={(event) => setTitleDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -496,6 +556,9 @@ function TaskHeader({
           ) : (
             <button
               className="detail-title detail-title-button"
+              data-search-entity="task"
+              data-search-id={taskDetail.id}
+              tabIndex={-1}
               type="button"
               title="Task 이름 수정"
               onClick={() => setIsEditingTitle(true)}
@@ -503,11 +566,26 @@ function TaskHeader({
               {taskDetail.title}
             </button>
           )}
-          <p className="detail-description">
-            {taskDetail.description || '설명이 없습니다.'}
-          </p>
+          {isEditingDescription ? (
+            <div className="task-description-editor" data-search-entity="description" data-search-id={taskDetail.id} tabIndex={-1}>
+              <textarea value={descriptionDraft} onChange={(event) => setDescriptionDraft(event.target.value)} autoFocus />
+              <div><button type="button" disabled={isSaving} onClick={() => void saveDescription()}>저장</button><button type="button" disabled={isSaving} onClick={() => { setDescriptionDraft(taskDetail.description); setIsEditingDescription(false) }}>취소</button></div>
+            </div>
+          ) : (
+            <button className="detail-description detail-description-button" type="button" data-search-entity="description" data-search-id={taskDetail.id} onClick={() => setIsEditingDescription(true)}>{taskDetail.description || '설명이 없습니다. 클릭해서 입력하세요.'}</button>
+          )}
         </div>
       </div>
+
+      <div className="task-classification-row">
+        <label>우선순위<select value={taskDetail.priority} disabled={isSaving} onChange={(event) => void saveTaskChanges({ priority: event.target.value as TaskPriority }).catch(() => undefined)}><option value="low">낮음</option><option value="normal">보통</option><option value="high">높음</option><option value="urgent">긴급</option></select></label>
+        <label>진행 상태<select value={taskDetail.workflowStatus} disabled={isSaving} onChange={(event) => void saveTaskChanges({ workflowStatus: event.target.value as WorkflowStatus }).catch(() => undefined)}><option value="todo">할 일</option><option value="in_progress">진행 중</option><option value="blocked">막힘</option><option value="done">완료</option></select></label>
+        <div className="task-tags-field" data-search-entity="tags" data-search-id={taskDetail.id} tabIndex={-1}>
+          <span>태그</span>
+          {isEditingTags ? <><input value={tagsDraft} onChange={(event) => setTagsDraft(event.target.value)} placeholder="태그, 쉼표 구분" autoFocus /><button type="button" disabled={isSaving} onClick={() => void saveTags()}>저장</button><button type="button" onClick={() => { setTagsDraft(taskDetail.tags.join(', ')); setIsEditingTags(false) }}>취소</button></> : <button type="button" onClick={() => setIsEditingTags(true)}>{taskDetail.tags.length ? taskDetail.tags.map((tag) => <i key={tag}>#{tag}</i>) : '태그 추가'}</button>}
+        </div>
+      </div>
+      {errorMessage && !activeEditor && <div className="task-field-error">{errorMessage}</div>}
 
       <div className="detail-meta-row">
         <div className="detail-meta">
@@ -540,6 +618,8 @@ function TaskHeader({
           <div className="meta-item">
             <button
               className="assignee-avatar meta-edit-trigger"
+              data-search-entity="assignee"
+              tabIndex={-1}
               type="button"
               aria-label="담당자 수정"
               onClick={openAssigneeEditor}
@@ -569,7 +649,7 @@ function TaskHeader({
           </div>
           <div className="attachment-summary-files">
             {taskDetail.attachments.map((attachment) => (
-              <div className="attachment-summary-item" key={attachment.id}>
+              <div className="attachment-summary-item" key={attachment.id} data-search-entity="attachment" data-search-id={attachment.id} tabIndex={-1}>
                 <span>{attachment.name}</span>
                 <button
                   type="button"
@@ -644,16 +724,12 @@ function TaskHeader({
               <button
                 className={
                   'assignee-none-option' +
-                  (selectedAssigneeIds.length === 0 &&
-                  manualAssigneeNames.length === 0
+                  (selectedAssigneeIds.length === 0
                     ? ' is-selected'
                     : '')
                 }
                 type="button"
-                onClick={() => {
-                  setSelectedAssigneeIds([])
-                  setManualAssigneeNames([])
-                }}
+                onClick={() => setSelectedAssigneeIds([])}
               >
                 <span className="assignee-none-icon">−</span>
                 <span>
@@ -692,45 +768,6 @@ function TaskHeader({
             <p className="assignee-notification-hint">
               선택된 로그인 계정마다 이 Task의 PC 알림이 개별적으로 표시됩니다.
             </p>
-
-            <div className="manual-assignee-section">
-              <strong>목록에 없는 담당자</strong>
-              <div className="manual-assignee-input-row">
-                <input
-                  type="text"
-                  value={manualAssigneeDraft}
-                  onChange={(event) => setManualAssigneeDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      addManualAssignee()
-                    }
-                  }}
-                  placeholder="담당자 이름 입력"
-                />
-                <button type="button" onClick={addManualAssignee}>추가</button>
-              </div>
-              {manualAssigneeNames.length > 0 && (
-                <div className="manual-assignee-chips">
-                  {manualAssigneeNames.map((name) => (
-                    <span key={name}>
-                      {name}
-                      <button
-                        type="button"
-                        aria-label={`${name} 담당자 제거`}
-                        onClick={() =>
-                          setManualAssigneeNames((current) =>
-                            current.filter((item) => item !== name),
-                          )
-                        }
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
 
             {errorMessage && <div className="task-field-error">{errorMessage}</div>}
             <div className="task-field-modal-actions">

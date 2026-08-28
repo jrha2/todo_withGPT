@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, MouseEvent } from 'react'
 import type { AuthUser } from '../../../services/api/authApi'
+import type {
+  NavigationScope,
+  NavigationSearchHit,
+} from '../../../services/api/navigationApi'
+import type { WorkspaceView } from '../../../services/api/workspaceApi'
+import { setDraftDirty } from '../../../services/draftRegistry'
 
 type NavigationNode = {
   id: string
@@ -10,6 +16,8 @@ type NavigationNode = {
   expanded?: boolean
   order: number
   completed: boolean
+  matchKinds?: string[]
+  searchHits: NavigationSearchHit[]
 }
 
 type RenderNode = NavigationNode & {
@@ -24,20 +32,33 @@ type NavigationBarProps = {
   onCollapse: () => void
   isBriefingActive: boolean
   onOpenBriefing: () => void
+  activeSmartView: WorkspaceView | null
+  onOpenSmartView: (view: WorkspaceView) => void
+  isTrashActive: boolean
+  onOpenTrash: () => void
+  onOpenSearchHit: (hit: NavigationSearchHit) => void
   tree: NavigationNode[]
+  searchQuery: string
+  onSearchQueryChange: (query: string) => void
+  navigationScope: NavigationScope
+  onNavigationScopeChange: (scope: NavigationScope) => void
+  showCompletedTasks: boolean
+  onShowCompletedTasksChange: (showCompleted: boolean) => void
+  isNavigationLoading: boolean
+  navigationError: string
   selectedTaskId: string
   onSelectTask: (taskId: string) => void
-  onToggleFolder: (folderId: string) => void
-  onRenameNode: (nodeId: string, nextTitle: string) => void
-  onCreateFolder: (title: string, parentId: string | null) => void
-  onCreateTask: (title: string, parentId: string | null) => void
-  onCreateChildFolder: (parentId: string, title: string) => void
-  onCreateChildTask: (parentId: string, title: string) => void
-  onDeleteNode: (nodeId: string) => void
-  onMoveNode: (nodeId: string, targetFolderId: string | null) => void
-  onCopyNode: (nodeId: string, targetFolderId: string | null) => void
-  onMoveNodeUp: (nodeId: string) => void
-  onMoveNodeDown: (nodeId: string) => void
+  onToggleFolder: (folderId: string) => Promise<void>
+  onRenameNode: (nodeId: string, nextTitle: string) => Promise<void>
+  onCreateFolder: (title: string, parentId: string | null) => Promise<void>
+  onCreateTask: (title: string, parentId: string | null) => Promise<void>
+  onCreateChildFolder: (parentId: string, title: string) => Promise<void>
+  onCreateChildTask: (parentId: string, title: string) => Promise<void>
+  onDeleteNode: (nodeId: string) => Promise<void>
+  onMoveNode: (nodeId: string, targetFolderId: string | null) => Promise<void>
+  onCopyNode: (nodeId: string, targetFolderId: string | null) => Promise<void>
+  onMoveNodeUp: (nodeId: string) => Promise<void>
+  onMoveNodeDown: (nodeId: string) => Promise<void>
   onDropNode: (
     nodeId: string,
     targetNodeId: string,
@@ -73,6 +94,35 @@ type CopyState = {
   nodeId: string
 } | null
 
+const smartViews: Array<{ value: WorkspaceView; label: string }> = [
+  { value: 'today', label: '오늘' },
+  { value: 'overdue', label: '기한 초과' },
+  { value: 'week', label: '이번 주' },
+  { value: 'incomplete', label: '미완료' },
+  { value: 'unassigned', label: '미지정' },
+  { value: 'favorites', label: '즐겨찾기' },
+  { value: 'recent', label: '최근' },
+]
+
+function renderHighlightedSnippet(hit: NavigationSearchHit) {
+  const ranges = [...hit.highlights]
+    .filter((range) => range.start >= 0 && range.end > range.start && range.start < hit.snippet.length)
+    .sort((left, right) => left.start - right.start)
+  const parts: Array<{ text: string; marked: boolean }> = []
+  let cursor = 0
+  ranges.forEach((range) => {
+    const start = Math.max(cursor, range.start)
+    const end = Math.min(hit.snippet.length, range.end)
+    if (start > cursor) parts.push({ text: hit.snippet.slice(cursor, start), marked: false })
+    if (end > start) parts.push({ text: hit.snippet.slice(start, end), marked: true })
+    cursor = Math.max(cursor, end)
+  })
+  if (cursor < hit.snippet.length) parts.push({ text: hit.snippet.slice(cursor), marked: false })
+  return parts.map((part, index) => part.marked
+    ? <mark key={`${index}-${part.text}`}>{part.text}</mark>
+    : <span key={`${index}-${part.text}`}>{part.text}</span>)
+}
+
 function NavigationBar({
   currentUser,
   onOpenAdmin,
@@ -80,7 +130,20 @@ function NavigationBar({
   onCollapse,
   isBriefingActive,
   onOpenBriefing,
+  activeSmartView,
+  onOpenSmartView,
+  isTrashActive,
+  onOpenTrash,
+  onOpenSearchHit,
   tree,
+  searchQuery,
+  onSearchQueryChange,
+  navigationScope,
+  onNavigationScopeChange,
+  showCompletedTasks,
+  onShowCompletedTasksChange,
+  isNavigationLoading,
+  navigationError,
   selectedTaskId,
   onSelectTask,
   onToggleFolder,
@@ -114,10 +177,30 @@ function NavigationBar({
   const [copyTargetFolderId, setCopyTargetFolderId] = useState('')
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null)
   const [dropTargetState, setDropTargetState] = useState<DropTargetState>(null)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const [mutationError, setMutationError] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase()
-  const isSearching = normalizedSearchQuery.length > 0
+  const isSearching = searchQuery.trim().length > 0
+
+  useEffect(() => {
+    const dirty = Boolean(
+      editingNodeId || childCreateTitle.trim() || newFolderTitle.trim()
+      || newTaskTitle.trim() || moveState || copyState,
+    )
+    setDraftDirty('navigation-editors', dirty, () => {
+      setEditingNodeId(null)
+      setEditingTitle('')
+      setChildCreateState(null)
+      setChildCreateTitle('')
+      setNewFolderTitle('')
+      setNewTaskTitle('')
+      setIsCreateOpen(false)
+      setMoveState(null)
+      setCopyState(null)
+    })
+    return () => setDraftDirty('navigation-editors', false)
+  }, [editingNodeId, childCreateTitle, newFolderTitle, newTaskTitle, moveState, copyState])
 
   useEffect(() => {
     const handleSearchShortcut = (event: KeyboardEvent) => {
@@ -129,30 +212,22 @@ function NavigationBar({
 
     window.addEventListener('keydown', handleSearchShortcut)
     return () => window.removeEventListener('keydown', handleSearchShortcut)
-  }, [])
+  }, [onSearchQueryChange])
+
+  const displayTree = useMemo(
+    () => showCompletedTasks
+      ? tree
+      : tree.filter((node) => node.type === 'folder' || !node.completed),
+    [tree, showCompletedTasks],
+  )
 
   const visibleNodes = useMemo(() => {
     const childrenMap = new Map<string | null, NavigationNode[]>()
-    const nodeMap = new Map(tree.map((node) => [node.id, node]))
-    const includedNodeIds = new Set<string>()
 
-    tree.forEach((node) => {
+    displayTree.forEach((node) => {
       const siblings = childrenMap.get(node.parentId) ?? []
       siblings.push(node)
       childrenMap.set(node.parentId, siblings)
-
-      if (isSearching && node.title.toLocaleLowerCase().includes(normalizedSearchQuery)) {
-        let currentNode: NavigationNode | undefined = node
-        const visitedNodeIds = new Set<string>()
-
-        while (currentNode && !visitedNodeIds.has(currentNode.id)) {
-          includedNodeIds.add(currentNode.id)
-          visitedNodeIds.add(currentNode.id)
-          currentNode = currentNode.parentId
-            ? nodeMap.get(currentNode.parentId)
-            : undefined
-        }
-      }
     })
 
     childrenMap.forEach((siblings) => {
@@ -162,10 +237,7 @@ function NavigationBar({
     const result: RenderNode[] = []
 
     const walk = (parentId: string | null, depth: number) => {
-      const allChildren = childrenMap.get(parentId) ?? []
-      const children = isSearching
-        ? allChildren.filter((node) => includedNodeIds.has(node.id))
-        : allChildren
+      const children = childrenMap.get(parentId) ?? []
 
       children.forEach((node, index) => {
         result.push({
@@ -183,6 +255,7 @@ function NavigationBar({
             expanded: false,
             order: 999999,
             completed: false,
+            searchHits: [],
             depth: depth + 1,
           })
         }
@@ -196,6 +269,7 @@ function NavigationBar({
             expanded: false,
             order: 999998,
             completed: false,
+            searchHits: [],
             depth: depth + 1,
           })
         }
@@ -209,6 +283,7 @@ function NavigationBar({
             expanded: false,
             order: 999997,
             completed: false,
+            searchHits: [],
             depth: depth + 1,
           })
         }
@@ -222,14 +297,7 @@ function NavigationBar({
     walk(null, 0)
 
     return result
-  }, [
-    tree,
-    childCreateState,
-    moveState,
-    copyState,
-    isSearching,
-    normalizedSearchQuery,
-  ])
+  }, [displayTree, childCreateState, moveState, copyState, isSearching])
 
   const deleteTarget = deleteTargetId
     ? tree.find((node) => node.id === deleteTargetId) ?? null
@@ -301,46 +369,49 @@ function NavigationBar({
     setMenuState(null)
   }
 
-  const handleRenameSubmit = () => {
-    if (!editingNodeId) {
-      return
-    }
-
+  const handleRenameSubmit = async () => {
+    if (!editingNodeId) return
     const trimmed = editingTitle.trim()
-
-    if (!trimmed) {
-      return
+    if (!trimmed) return
+    setMutationError('')
+    try {
+      await onRenameNode(editingNodeId, trimmed)
+      setEditingNodeId(null)
+      setEditingTitle('')
+    } catch (error) {
+      console.error('Failed to rename Navigation item:', error)
+      setMutationError('이름을 변경하지 못했습니다. 입력한 내용은 보존됩니다.')
     }
-
-    onRenameNode(editingNodeId, trimmed)
-    setEditingNodeId(null)
-    setEditingTitle('')
   }
 
-  const handleCreateFolderSubmit = () => {
+  const handleCreateFolderSubmit = async () => {
     const trimmed = newFolderTitle.trim()
-
-    if (!trimmed) {
-      return
+    if (!trimmed) return
+    setMutationError('')
+    try {
+      await onCreateFolder(trimmed, newFolderParentId === 'root' ? null : newFolderParentId)
+      setNewFolderTitle('')
+      setNewFolderParentId('root')
+      setIsCreateOpen(false)
+    } catch (error) {
+      console.error('Failed to create folder:', error)
+      setMutationError('폴더를 추가하지 못했습니다. 입력한 내용은 보존됩니다.')
     }
-
-    onCreateFolder(trimmed, newFolderParentId === 'root' ? null : newFolderParentId)
-    setNewFolderTitle('')
-    setNewFolderParentId('root')
-    setIsCreateOpen(false)
   }
 
-  const handleCreateTaskSubmit = () => {
+  const handleCreateTaskSubmit = async () => {
     const trimmed = newTaskTitle.trim()
-
-    if (!trimmed) {
-      return
+    if (!trimmed) return
+    setMutationError('')
+    try {
+      await onCreateTask(trimmed, newTaskParentId === 'root' ? null : newTaskParentId)
+      setNewTaskTitle('')
+      setNewTaskParentId('root')
+      setIsCreateOpen(false)
+    } catch (error) {
+      console.error('Failed to create Task:', error)
+      setMutationError('Task를 추가하지 못했습니다. 입력한 내용은 보존됩니다.')
     }
-
-    onCreateTask(trimmed, newTaskParentId === 'root' ? null : newTaskParentId)
-    setNewTaskTitle('')
-    setNewTaskParentId('root')
-    setIsCreateOpen(false)
   }
 
   const handleOpenChildCreate = (kind: 'folder' | 'task') => {
@@ -356,25 +427,23 @@ function NavigationBar({
     setMenuState(null)
   }
 
-  const handleChildCreateSubmit = () => {
-    if (!childCreateState) {
-      return
-    }
-
+  const handleChildCreateSubmit = async () => {
+    if (!childCreateState) return
     const trimmed = childCreateTitle.trim()
-
-    if (!trimmed) {
-      return
+    if (!trimmed) return
+    setMutationError('')
+    try {
+      if (childCreateState.kind === 'folder') {
+        await onCreateChildFolder(childCreateState.parentId, trimmed)
+      } else {
+        await onCreateChildTask(childCreateState.parentId, trimmed)
+      }
+      setChildCreateState(null)
+      setChildCreateTitle('')
+    } catch (error) {
+      console.error('Failed to create child Navigation item:', error)
+      setMutationError('하위 항목을 추가하지 못했습니다. 입력한 내용은 보존됩니다.')
     }
-
-    if (childCreateState.kind === 'folder') {
-      onCreateChildFolder(childCreateState.parentId, trimmed)
-    } else {
-      onCreateChildTask(childCreateState.parentId, trimmed)
-    }
-
-    setChildCreateState(null)
-    setChildCreateTitle('')
   }
 
   const handleOpenDelete = () => {
@@ -382,8 +451,25 @@ function NavigationBar({
       return
     }
 
+    setDeleteError('')
     setDeleteTargetId(menuState.nodeId)
     setMenuState(null)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || isDeleting) return
+
+    setIsDeleting(true)
+    setDeleteError('')
+    try {
+      await onDeleteNode(deleteTarget.id)
+      setDeleteTargetId(null)
+    } catch (error) {
+      console.error('Failed to delete Navigation item:', error)
+      setDeleteError('삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    } finally {
+      setIsDeleting(false)
+    }
   }
 
   const handleOpenMove = () => {
@@ -396,17 +482,17 @@ function NavigationBar({
     setMenuState(null)
   }
 
-  const handleMoveSubmit = () => {
-    if (!moveState || !moveTargetFolderId) {
-      return
+  const handleMoveSubmit = async () => {
+    if (!moveState || !moveTargetFolderId) return
+    setMutationError('')
+    try {
+      await onMoveNode(moveState.nodeId, moveTargetFolderId === 'root' ? null : moveTargetFolderId)
+      setMoveState(null)
+      setMoveTargetFolderId('')
+    } catch (error) {
+      console.error('Failed to move Navigation item:', error)
+      setMutationError('항목을 이동하지 못했습니다. 선택한 위치는 보존됩니다.')
     }
-
-    onMoveNode(
-      moveState.nodeId,
-      moveTargetFolderId === 'root' ? null : moveTargetFolderId,
-    )
-    setMoveState(null)
-    setMoveTargetFolderId('')
   }
 
   const handleOpenCopy = () => {
@@ -419,35 +505,41 @@ function NavigationBar({
     setMenuState(null)
   }
 
-  const handleCopySubmit = () => {
-    if (!copyState || !copyTargetFolderId) {
-      return
+  const handleCopySubmit = async () => {
+    if (!copyState || !copyTargetFolderId) return
+    setMutationError('')
+    try {
+      await onCopyNode(copyState.nodeId, copyTargetFolderId === 'root' ? null : copyTargetFolderId)
+      setCopyState(null)
+      setCopyTargetFolderId('')
+    } catch (error) {
+      console.error('Failed to copy Navigation item:', error)
+      setMutationError('항목을 복사하지 못했습니다. 선택한 위치는 보존됩니다.')
     }
-
-    onCopyNode(
-      copyState.nodeId,
-      copyTargetFolderId === 'root' ? null : copyTargetFolderId,
-    )
-    setCopyState(null)
-    setCopyTargetFolderId('')
   }
 
-  const handleMoveUp = () => {
-    if (!menuState) {
-      return
+  const handleMoveUp = async () => {
+    if (!menuState) return
+    setMutationError('')
+    try {
+      await onMoveNodeUp(menuState.nodeId)
+      setMenuState(null)
+    } catch (error) {
+      console.error('Failed to reorder Navigation item:', error)
+      setMutationError('항목 순서를 변경하지 못했습니다.')
     }
-
-    onMoveNodeUp(menuState.nodeId)
-    setMenuState(null)
   }
 
-  const handleMoveDown = () => {
-    if (!menuState) {
-      return
+  const handleMoveDown = async () => {
+    if (!menuState) return
+    setMutationError('')
+    try {
+      await onMoveNodeDown(menuState.nodeId)
+      setMenuState(null)
+    } catch (error) {
+      console.error('Failed to reorder Navigation item:', error)
+      setMutationError('항목 순서를 변경하지 못했습니다.')
     }
-
-    onMoveNodeDown(menuState.nodeId)
-    setMenuState(null)
   }
 
   const isInvalidDrop = (
@@ -587,7 +679,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Beta 0.9.8</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.0.0</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -625,24 +717,70 @@ function NavigationBar({
         <span className="navigation-briefing-arrow" aria-hidden="true">→</span>
       </button>
 
-      <div className="navigation-search">
-        <span className="navigation-search-icon">⌕</span>
-        <input
-          ref={searchInputRef}
-          type="search"
-          value={searchQuery}
-          placeholder="폴더 또는 Task 검색"
-          aria-label="폴더 또는 Task 검색"
-          onChange={(event) => setSearchQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              setSearchQuery('')
-              event.currentTarget.blur()
-            }
-          }}
-        />
-        <kbd>Ctrl K</kbd>
+      <div className="navigation-smart-views" aria-label="통합 업무 보기">
+        {smartViews.map((view) => (
+          <button className={activeSmartView === view.value ? 'is-active' : ''} type="button" key={view.value} onClick={() => onOpenSmartView(view.value)}>{view.label}</button>
+        ))}
+        <button className={isTrashActive ? 'is-active is-trash' : 'is-trash'} type="button" onClick={onOpenTrash}>휴지통</button>
       </div>
+
+      <div className="navigation-search-block">
+        <div className="navigation-search">
+          <span className="navigation-search-icon">⌕</span>
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            placeholder="전체 업무 내용 검색"
+            aria-label="전체 업무 내용 검색"
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                onSearchQueryChange('')
+                event.currentTarget.blur()
+              }
+            }}
+          />
+          <kbd>Ctrl K</kbd>
+        </div>
+        <div className="navigation-scope-filter" aria-label="업무 표시 범위">
+          <button
+            className={navigationScope === 'all' ? 'is-active' : ''}
+            type="button"
+            aria-pressed={navigationScope === 'all'}
+            onClick={() => onNavigationScopeChange('all')}
+          >
+            전체 업무
+          </button>
+          <button
+            className={navigationScope === 'mine' ? 'is-active' : ''}
+            type="button"
+            aria-pressed={navigationScope === 'mine'}
+            onClick={() => onNavigationScopeChange('mine')}
+          >
+            내 Task
+          </button>
+        </div>
+        <button
+          className={`completed-visibility-toggle is-navigation ${showCompletedTasks ? 'is-active' : ''}`}
+          type="button"
+          aria-pressed={showCompletedTasks}
+          onClick={() => onShowCompletedTasksChange(!showCompletedTasks)}
+        >
+          <span aria-hidden="true">{showCompletedTasks ? '✓' : '○'}</span>
+          완료 Task 표시
+        </button>
+        {(isNavigationLoading || navigationError) && (
+          <div
+            className={`navigation-search-status ${navigationError ? 'is-error' : ''}`}
+            role="status"
+          >
+            {navigationError || '업무 내용을 검색하고 있습니다...'}
+          </div>
+        )}
+      </div>
+
+      {mutationError && <div className="navigation-search-status is-error" role="alert">{mutationError}</div>}
 
       <div className="navigation-account-card">
         <div className="navigation-account-avatar">
@@ -717,12 +855,14 @@ function NavigationBar({
       )}
 
       <div className="navigation-section-header">
-        <span>프로젝트</span>
         <span>
           {isSearching
-            ? visibleNodes.filter((node) => node.type === 'task').length
-            : tree.filter((node) => node.type === 'task').length}
+            ? '검색 결과'
+            : navigationScope === 'mine'
+              ? '내 Task'
+              : '프로젝트'}
         </span>
+        <span>{displayTree.filter((node) => node.type === 'task').length}</span>
       </div>
 
       <div
@@ -862,6 +1002,7 @@ function NavigationBar({
             <div
               className={[
                 'navigation-node-row',
+                `navigation-depth-${Math.min(node.depth, 4)}`,
                 draggedNodeId === node.id ? 'is-dragging' : '',
                 dropTargetState?.nodeId === node.id
                   ? `drop-${dropTargetState.position}`
@@ -869,6 +1010,7 @@ function NavigationBar({
               ]
                 .filter(Boolean)
                 .join(' ')}
+              data-depth={Math.min(node.depth, 4)}
               key={node.id}
               draggable={!isEditing && !isSearching}
               onContextMenu={(event) => openMenu(event, node.id, node.type)}
@@ -883,6 +1025,7 @@ function NavigationBar({
                     className={[
                       'tree-node',
                       node.type,
+                      `tree-depth-${Math.min(node.depth, 4)}`,
                       selectedTaskId === node.id ? 'is-selected' : '',
                       node.type === 'task' && node.completed ? 'is-completed' : '',
                     ]
@@ -908,6 +1051,11 @@ function NavigationBar({
                         </span>
                         <span className="tree-node-icon folder-icon" />
                         <span className="tree-node-label">{node.title}</span>
+                        {isSearching && Boolean(node.matchKinds?.length) && (
+                          <span className="tree-node-match-kind">
+                            {node.matchKinds?.join(' · ')}
+                          </span>
+                        )}
                       </>
                     ) : (
                       <>
@@ -929,12 +1077,28 @@ function NavigationBar({
                         )}
                         <span className="tree-node-icon task-icon" />
                         <span className="tree-node-label">{node.title}</span>
+                        {isSearching && Boolean(node.matchKinds?.length) && (
+                          <span className="tree-node-match-kind">
+                            {node.matchKinds?.join(' · ')}
+                          </span>
+                        )}
                         {node.completed && (
                           <span className="tree-node-completed-badge">완료</span>
                         )}
                       </>
                     )}
                   </button>
+
+                  {isSearching && node.searchHits.length > 0 && (
+                    <div className="navigation-search-hits">
+                      {node.searchHits.slice(0, 3).map((hit) => (
+                        <button type="button" key={hit.resultId} onClick={(event) => { event.stopPropagation(); onOpenSearchHit(hit) }}>
+                          <small>{hit.matchKind}</small>
+                          <span>{renderHighlightedSnippet(hit)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   <button
                     className="navigation-more-button"
@@ -980,9 +1144,13 @@ function NavigationBar({
             </div>
           )
         })}
-        {isSearching && visibleNodes.length === 0 && (
+        {!isNavigationLoading && visibleNodes.length === 0 && (
           <div className="navigation-search-empty" role="status">
-            검색 결과가 없습니다.
+            {isSearching
+              ? '검색 결과가 없습니다.'
+              : navigationScope === 'mine'
+                ? '나에게 할당된 Task가 없습니다.'
+                : '표시할 업무가 없습니다.'}
           </div>
         )}
       </div>
@@ -1036,25 +1204,37 @@ function NavigationBar({
           <div className="confirm-modal">
             <div className="confirm-modal-title">Navigation 항목 삭제 확인</div>
             <div className="confirm-modal-body">
-              "{deleteTarget.title}" 항목을 삭제하시겠습니까?
+              <strong>정말 삭제하시겠습니까?</strong>
+              <br />
+              “{deleteTarget.title}” 항목을 삭제합니다.
               {deleteTarget.type === 'folder' && (
                 <>
                   <br />
                   폴더 안의 모든 하위 폴더와 Task도 함께 삭제됩니다.
                 </>
               )}
+              {deleteError && (
+                <div className="navigation-delete-error" role="alert">
+                  {deleteError}
+                </div>
+              )}
             </div>
             <div className="confirm-modal-actions">
               <button
                 type="button"
+                disabled={isDeleting}
+                onClick={() => void handleConfirmDelete()}
+              >
+                {isDeleting ? '삭제 중...' : '삭제'}
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
                 onClick={() => {
-                  onDeleteNode(deleteTarget.id)
+                  setDeleteError('')
                   setDeleteTargetId(null)
                 }}
               >
-                삭제
-              </button>
-              <button type="button" onClick={() => setDeleteTargetId(null)}>
                 취소
               </button>
             </div>

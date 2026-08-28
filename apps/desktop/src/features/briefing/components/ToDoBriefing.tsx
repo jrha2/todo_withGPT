@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 import {
   getBriefingData,
   type BriefingChange,
@@ -8,6 +9,8 @@ import {
 
 type ToDoBriefingProps = {
   onOpenTask: (taskId: string) => void
+  remoteRefreshRevision?: number | null
+  onRemoteRefreshComplete?: (revision: number, succeeded: boolean) => void
 }
 
 const actionLabels: Record<string, string> = {
@@ -51,6 +54,16 @@ function getDueStatus(dueDate: string) {
   return { label: `${difference}일 후`, tone: 'upcoming' }
 }
 
+function handleTaskCardKeyDown(
+  event: KeyboardEvent<HTMLElement>,
+  taskId: string,
+  onOpenTask: (taskId: string) => void,
+) {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  onOpenTask(taskId)
+}
+
 function ChangeCard({
   change,
   onOpenTask,
@@ -58,8 +71,19 @@ function ChangeCard({
   change: BriefingChange
   onOpenTask: (taskId: string) => void
 }) {
+  const taskId = change.taskId
+
   return (
-    <article className="briefing-change-card">
+    <article
+      className={`briefing-change-card ${taskId ? 'is-clickable' : ''}`}
+      role={taskId ? 'link' : undefined}
+      tabIndex={taskId ? 0 : undefined}
+      aria-label={taskId ? `${change.title} Task 열기` : undefined}
+      onClick={taskId ? () => onOpenTask(taskId) : undefined}
+      onKeyDown={taskId
+        ? (event) => handleTaskCardKeyDown(event, taskId, onOpenTask)
+        : undefined}
+    >
       <div className={`briefing-change-icon action-${change.actionType}`} aria-hidden="true">
         {change.actionType === 'completed' ? '✓' : change.actionType === 'commented' ? '＋' : '◇'}
       </div>
@@ -71,10 +95,10 @@ function ChangeCard({
         <p>{change.summary}</p>
         <small>{change.actorName} · {formatActivityTime(change.createdAt)}</small>
       </div>
-      {change.taskId && (
-        <button type="button" onClick={() => onOpenTask(change.taskId!)}>
+      {taskId && (
+        <span className="briefing-card-link" aria-hidden="true">
           바로가기 <span>→</span>
-        </button>
+        </span>
       )}
     </article>
   )
@@ -89,7 +113,14 @@ function DueCard({
 }) {
   const status = getDueStatus(item.dueDate)
   return (
-    <article className={`briefing-due-card ${item.completed ? 'is-completed' : ''}`}>
+    <article
+      className={`briefing-due-card is-clickable ${item.completed ? 'is-completed' : ''}`}
+      role="link"
+      tabIndex={0}
+      aria-label={`${item.title} Task 열기`}
+      onClick={() => onOpenTask(item.taskId)}
+      onKeyDown={(event) => handleTaskCardKeyDown(event, item.taskId, onOpenTask)}
+    >
       <div className="briefing-due-topline">
         <span className="briefing-due-type">{item.itemType === 'task' ? 'TASK' : 'SUB TASK'}</span>
         <span className={`briefing-due-status is-${status.tone}`}>{status.label}</span>
@@ -100,14 +131,14 @@ function DueCard({
         <div><dt>기한</dt><dd>{item.dueDate}</dd></div>
         <div><dt>담당자</dt><dd>{item.assignee || '미지정'}</dd></div>
       </dl>
-      <button type="button" onClick={() => onOpenTask(item.taskId)}>
+      <span className="briefing-card-link" aria-hidden="true">
         업무 바로가기 <span>→</span>
-      </button>
+      </span>
     </article>
   )
 }
 
-function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
+function ToDoBriefing({ onOpenTask, remoteRefreshRevision, onRemoteRefreshComplete }: ToDoBriefingProps) {
   const [data, setData] = useState<BriefingData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
@@ -130,12 +161,16 @@ function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
     let cancelled = false
     getBriefingData(7)
       .then((briefing) => {
-        if (!cancelled) setData(briefing)
+        if (!cancelled) {
+          setData(briefing)
+          if (remoteRefreshRevision) onRemoteRefreshComplete?.(remoteRefreshRevision, true)
+        }
       })
       .catch((loadError) => {
         console.error('Failed to load To Do Briefing:', loadError)
         if (!cancelled) {
           setError('Briefing 데이터를 불러오지 못했습니다. 서버 연결을 확인해 주세요.')
+          if (remoteRefreshRevision) onRemoteRefreshComplete?.(remoteRefreshRevision, false)
         }
       })
       .finally(() => {
@@ -145,7 +180,7 @@ function ToDoBriefing({ onOpenTask }: ToDoBriefingProps) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [remoteRefreshRevision, onRemoteRefreshComplete])
 
   const summary = useMemo(() => {
     const changes = (data?.changes || []).filter((item) => scope === 'team' || item.isMine)

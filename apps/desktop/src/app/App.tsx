@@ -1,20 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminUserManager from '../features/admin/components/AdminUserManager'
 import LoginScreen from '../features/auth/components/LoginScreen'
 import TaskDetailPage from '../pages/TaskDetailPage'
+import { getAuthSession, logout, type AuthUser } from '../services/api/authApi'
 import {
-  getAuthSession,
-  logout,
-  type AuthUser,
-} from '../services/api/authApi'
+  confirmDiscardDirtyDrafts,
+  hasDirtyDrafts,
+  subscribeToDirtyDrafts,
+} from '../services/draftRegistry'
+
+type SyncStatus = Awaited<ReturnType<typeof window.api.sync.getStatus>>
 
 function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
   const [isSessionLoading, setIsSessionLoading] = useState(true)
   const [isAdminOpen, setIsAdminOpen] = useState(false)
   const [userRevision, setUserRevision] = useState(0)
-  const [pendingSyncRevision, setPendingSyncRevision] = useState<number | null>(null)
-  const [isSyncPromptOpen, setIsSyncPromptOpen] = useState(false)
+  const [remoteRefreshRevision, setRemoteRefreshRevision] = useState<number | null>(null)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
+  const [syncApplyError, setSyncApplyError] = useState('')
+  const [hasDirty, setHasDirty] = useState(false)
+  const [hasPendingRemote, setHasPendingRemote] = useState(false)
+  const latestSyncRevisionRef = useRef(0)
+  const acknowledgedSyncRevisionRef = useRef(0)
+  const refreshInFlightRef = useRef(false)
+  const dirtyRef = useRef(false)
+  const disposedRef = useRef(false)
 
   useEffect(() => {
     getAuthSession()
@@ -26,99 +37,145 @@ function App() {
       .finally(() => setIsSessionLoading(false))
   }, [])
 
-  useEffect(() => {
-    const showRemoteChange = (change: { revision: number }) => {
-      const revision = Number(change.revision) || 0
-      if (!revision) return
+  const startPendingRefresh = useCallback(() => {
+    const revision = latestSyncRevisionRef.current
+    if (
+      disposedRef.current ||
+      dirtyRef.current ||
+      refreshInFlightRef.current ||
+      revision <= acknowledgedSyncRevisionRef.current
+    ) return
 
-      setPendingSyncRevision((current) => Math.max(current ?? 0, revision))
-      setIsSyncPromptOpen(true)
-    }
-
-    const unsubscribe = window.api.sync.onRemoteChange(showRemoteChange)
-    window.api.sync
-      .getState()
-      .then((state) => {
-        if (state.pendingEvent) showRemoteChange(state.pendingEvent)
-      })
-      .catch((error) => {
-        console.error('Failed to load sync state:', error)
-      })
-
-    return unsubscribe
+    refreshInFlightRef.current = true
+    setSyncApplyError('')
+    setRemoteRefreshRevision(revision)
   }, [])
 
-  const applyServerChanges = async () => {
-    if (!pendingSyncRevision) return
+  useEffect(() => {
+    const unsubscribe = subscribeToDirtyDrafts((dirty) => {
+      dirtyRef.current = dirty
+      setHasDirty(dirty)
+      if (!dirty) queueMicrotask(startPendingRefresh)
+    })
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasDirtyDrafts()) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      unsubscribe()
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [startPendingRefresh])
+
+  useEffect(() => {
+    disposedRef.current = false
+    const applyRemoteChange = (change: { revision: number }) => {
+      const revision = Number(change.revision) || 0
+      if (!revision) return
+      latestSyncRevisionRef.current = Math.max(latestSyncRevisionRef.current, revision)
+      setHasPendingRemote(revision > acknowledgedSyncRevisionRef.current)
+      startPendingRefresh()
+    }
+
+    const unsubscribeRemote = window.api.sync.onRemoteChange(applyRemoteChange)
+    const unsubscribeStatus = window.api.sync.onStatusChanged(setSyncStatus)
+    window.api.sync.getState()
+      .then((state) => {
+        setSyncStatus(state.status)
+        acknowledgedSyncRevisionRef.current = state.status.acknowledgedRevision
+        setHasPendingRemote(
+          Boolean(state.pendingEvent)
+          || (state.status.pendingRevision ?? 0) > state.status.acknowledgedRevision,
+        )
+        if (state.pendingEvent) applyRemoteChange(state.pendingEvent)
+      })
+      .catch((error) => console.error('Failed to load sync state:', error))
+
+    return () => {
+      disposedRef.current = true
+      unsubscribeRemote()
+      unsubscribeStatus()
+    }
+  }, [startPendingRefresh])
+
+  const handleRemoteRefreshComplete = useCallback(async (revision: number, succeeded: boolean) => {
+    if (revision !== remoteRefreshRevision) return
+    if (!succeeded) {
+      refreshInFlightRef.current = false
+      setRemoteRefreshRevision(null)
+      setSyncApplyError('원격 변경사항을 화면에 반영하지 못했습니다. 다시 시도해 주세요.')
+      return
+    }
 
     try {
-      await window.api.sync.acknowledge(pendingSyncRevision)
-      window.location.reload()
+      const result = await window.api.sync.acknowledge(revision) as { status?: SyncStatus }
+      acknowledgedSyncRevisionRef.current = revision
+      setHasPendingRemote(latestSyncRevisionRef.current > revision)
+      if (result.status) setSyncStatus(result.status)
+      setRemoteRefreshRevision(null)
+      refreshInFlightRef.current = false
+      setUserRevision((current) => current + 1)
+      queueMicrotask(startPendingRefresh)
     } catch (error) {
-      console.error('Failed to apply remote server change:', error)
+      console.error('Failed to acknowledge applied remote change:', error)
+      refreshInFlightRef.current = false
+      setRemoteRefreshRevision(null)
+      setSyncApplyError('반영 확인에 실패했습니다. 동기화를 다시 시도해 주세요.')
+    }
+  }, [remoteRefreshRevision, startPendingRefresh])
+
+  const handleRetrySync = async () => {
+    setSyncApplyError('')
+    try {
+      const status = await window.api.sync.retry()
+      setSyncStatus(status)
+      setHasPendingRemote((status.pendingRevision ?? 0) > status.acknowledgedRevision)
+      startPendingRefresh()
+    } catch (error) {
+      console.error('Failed to retry sync:', error)
+      setSyncApplyError('동기화 재시도에 실패했습니다.')
     }
   }
 
   const handleLogout = async () => {
+    if (!confirmDiscardDirtyDrafts('저장하지 않은 변경사항이 있습니다. 변경사항을 버리고 로그아웃하시겠습니까?')) return
     await logout()
     setIsAdminOpen(false)
     setCurrentUser(null)
   }
 
+  const handleOpenAdmin = () => {
+    if (!confirmDiscardDirtyDrafts('저장하지 않은 변경사항이 있습니다. 변경사항을 버리고 관리자 화면으로 이동하시겠습니까?')) return
+    setIsAdminOpen(true)
+  }
+
   if (isSessionLoading) {
-    return (
-      <main className="session-loading-screen">
-        <div className="login-brand-mark">✓</div>
-        <span>로그인 정보를 확인하고 있습니다...</span>
-      </main>
-    )
+    return <main className="session-loading-screen"><div className="login-brand-mark">✓</div><span>로그인 정보를 확인하고 있습니다...</span></main>
   }
+  if (!currentUser) return <LoginScreen onLogin={setCurrentUser} />
 
-  if (!currentUser) {
-    return <LoginScreen onLogin={setCurrentUser} />
-  }
-
+  const phase = syncStatus?.phase ?? 'connecting'
   return (
     <>
-      {pendingSyncRevision && !isSyncPromptOpen && (
-        <div className="sync-update-banner">
-          <span>서버에 아직 반영하지 않은 변경 내용이 있습니다.</span>
-          <button type="button" onClick={() => setIsSyncPromptOpen(true)}>
-            확인하기
-          </button>
-        </div>
-      )}
       <TaskDetailPage
         currentUser={currentUser}
         userRevision={userRevision}
-        onOpenAdmin={() => setIsAdminOpen(true)}
+        remoteRefreshRevision={remoteRefreshRevision}
+        onRemoteRefreshComplete={handleRemoteRefreshComplete}
+        onOpenAdmin={handleOpenAdmin}
         onLogout={handleLogout}
       />
+      <div className={`sync-phase-indicator is-${phase}`} role="status">
+        <i />
+        <span>{phase === 'synced' ? '동기화됨' : phase === 'syncing' ? '동기화 중' : phase === 'connecting' ? '연결 중' : phase === 'offline' ? '오프라인' : '동기화 실패'}</span>
+        {(phase === 'offline' || phase === 'failed' || syncApplyError) && <button type="button" onClick={() => void handleRetrySync()}>다시 시도</button>}
+      </div>
+      {hasDirty && hasPendingRemote && <div className="sync-dirty-banner">작성 중인 내용이 있어 원격 변경사항 반영을 보류하고 있습니다.</div>}
+      {syncApplyError && <div className="sync-error-banner" role="alert">{syncApplyError}</div>}
       {isAdminOpen && currentUser.role === 'admin' && (
-        <AdminUserManager
-          currentUser={currentUser}
-          onClose={() => setIsAdminOpen(false)}
-          onCurrentUserUpdated={setCurrentUser}
-          onUsersChanged={() => setUserRevision((revision) => revision + 1)}
-        />
-      )}
-      {isSyncPromptOpen && pendingSyncRevision && (
-        <div className="sync-modal-backdrop">
-          <div className="sync-update-modal" role="dialog" aria-modal="true">
-            <div className="sync-update-icon">↻</div>
-            <h2>서버 변경 내용 확인</h2>
-            <p>다른 사용자가 서버 데이터를 변경했습니다.</p>
-            <small>
-              작성 중인 내용을 확인한 뒤 반영해 주세요. 반영하면 최신 데이터를 불러오기 위해 화면이 새로고침됩니다.
-            </small>
-            <div className="sync-update-actions">
-              <button type="button" onClick={applyServerChanges}>반영하기</button>
-              <button type="button" onClick={() => setIsSyncPromptOpen(false)}>
-                나중에
-              </button>
-            </div>
-          </div>
-        </div>
+        <AdminUserManager currentUser={currentUser} onClose={() => setIsAdminOpen(false)} onCurrentUserUpdated={setCurrentUser} onUsersChanged={() => setUserRevision((revision) => revision + 1)} />
       )}
     </>
   )

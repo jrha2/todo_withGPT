@@ -1,9 +1,46 @@
-export async function getNavigationTree() {
+export type NavigationScope = 'all' | 'mine'
+
+export type NavigationSearchHit = {
+  resultId: string
+  taskId: string | null
+  entityType: 'folder' | 'task' | 'description' | 'subtask' | 'memo' | 'comment' | 'attachment' | 'assignee' | 'tags'
+  entityId: string
+  matchKind: string
+  snippet: string
+  highlights: Array<{ start: number; end: number }>
+}
+
+export type NavigationNodeRecord = {
+  id: string
+  parentId: string | null
+  type: 'folder' | 'task'
+  title: string
+  expanded: boolean
+  order: number
+  completed: boolean
+  matchKinds?: string[]
+  searchHits: NavigationSearchHit[]
+}
+
+export type TrashNodeRecord = {
+  id: string
+  type: 'folder' | 'task'
+  title: string
+  parentId: string | null
+  deletedAt: string
+  deletedBatchId: string
+  count: number
+}
+
+export async function getNavigationTree(options: {
+  query?: string
+  scope?: NavigationScope
+} = {}) {
   if (!window.api?.navigation?.getTree) {
     throw new Error('navigation API is not available')
   }
 
-  return window.api.navigation.getTree()
+  return window.api.navigation.getTree(options) as Promise<NavigationNodeRecord[]>
 }
 
 export async function createFolder(title: string, parentId: string | null) {
@@ -92,4 +129,25 @@ export async function setNavigationNodeExpanded(
   }
 
   return window.api.navigation.setExpanded(nodeId, expanded)
+}
+
+export async function getTrashNodes() {
+  if (!window.api?.navigation?.getTrash) {
+    throw new Error('navigation getTrash API is not available')
+  }
+  return window.api.navigation.getTrash() as Promise<TrashNodeRecord[]>
+}
+
+export async function restoreNavigationNode(nodeId: string) {
+  if (!window.api?.navigation?.restoreNode) {
+    throw new Error('navigation restoreNode API is not available')
+  }
+  return window.api.navigation.restoreNode(nodeId)
+}
+
+export async function permanentlyDeleteNavigationNode(nodeId: string) {
+  if (!window.api?.navigation?.permanentlyDeleteNode) {
+    throw new Error('navigation permanentlyDeleteNode API is not available')
+  }
+  return window.api.navigation.permanentlyDeleteNode(nodeId)
 }

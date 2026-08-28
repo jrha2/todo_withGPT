@@ -189,9 +189,56 @@ export async function getAssigneesFromServer(token) {
   return data.users
 }
 
-export async function getNavigationFromServer(token) {
-  const data = await request('/api/navigation', { token })
+export async function getNavigationFromServer(token, options = {}) {
+  const query = String(options.query ?? '').trim()
+  const scope = options.scope ?? 'all'
+  if (!['all', 'mine'].includes(scope)) {
+    throw new Error('INVALID_WORKSPACE_SCOPE')
+  }
+  const search = new URLSearchParams({ scope })
+  if (query) search.set('query', query)
+  const data = await request(`/api/navigation?${search.toString()}`, { token })
   return data.nodes
+}
+
+export async function getTrashFromServer(token) {
+  const data = await request('/api/navigation/trash', { token })
+  return data.nodes
+}
+
+export async function restoreNavigationOnServer(token, nodeId) {
+  const data = await request(
+    `/api/navigation/nodes/${encodeURIComponent(nodeId)}/restore`,
+    { method: 'POST', token },
+  )
+  return data.result
+}
+
+export async function permanentlyDeleteNavigationOnServer(token, nodeId) {
+  const data = await request(
+    `/api/navigation/nodes/${encodeURIComponent(nodeId)}/permanent`,
+    { method: 'DELETE', token },
+  )
+  return data.result
+}
+
+export async function getWorkspaceTasksFromServer(
+  token,
+  view,
+  scope = 'all',
+) {
+  const normalizedScope = scope ?? 'all'
+  if (!['all', 'mine'].includes(normalizedScope)) {
+    throw new Error('INVALID_WORKSPACE_SCOPE')
+  }
+  const search = new URLSearchParams({
+    view: String(view || 'incomplete'),
+    scope: normalizedScope,
+  })
+  const data = await request(`/api/workspace/tasks?${search.toString()}`, {
+    token,
+  })
+  return data.tasks
 }
 
 export async function getBriefingFromServer(token, days = 7) {
@@ -316,6 +363,31 @@ export async function toggleTaskOnServer(token, taskId) {
     { method: 'POST', token },
   )
   return data.task
+}
+
+export async function bulkUpdateTasksOnServer(token, taskIds, changes) {
+  const data = await request('/api/tasks/bulk', {
+    method: 'PUT',
+    token,
+    body: { taskIds, changes },
+  })
+  return data.tasks
+}
+
+export async function setTaskFavoriteOnServer(token, taskId, isFavorite) {
+  const data = await request(
+    `/api/tasks/${encodeURIComponent(taskId)}/favorite`,
+    { method: 'PUT', token, body: { isFavorite } },
+  )
+  return data.state
+}
+
+export async function touchTaskRecentOnServer(token, taskId) {
+  const data = await request(
+    `/api/tasks/${encodeURIComponent(taskId)}/recent`,
+    { method: 'POST', token },
+  )
+  return data.state
 }
 
 export async function getSubTasksFromServer(token, taskId) {

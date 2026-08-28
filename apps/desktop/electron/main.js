@@ -5,6 +5,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   screen,
   shell,
   Tray,
@@ -18,6 +19,7 @@ import Holidays from 'date-holidays'
 import electronUpdater from 'electron-updater'
 import {
   copyNavigationOnServer,
+  bulkUpdateTasksOnServer,
   createCommentOnServer,
   createFolderOnServer,
   createMemoOnServer,
@@ -39,6 +41,8 @@ import {
   getMemoFromServer,
   getMemosFromServer,
   getNavigationFromServer,
+  getTrashFromServer,
+  getWorkspaceTasksFromServer,
   getServerSession,
   getSyncStateFromServer,
   getServerUrl,
@@ -49,6 +53,8 @@ import {
   loginToServer,
   logoutFromServer,
   moveNavigationOnServer,
+  permanentlyDeleteNavigationOnServer,
+  restoreNavigationOnServer,
   renameNavigationOnServer,
   reorderNavigationOnServer,
   reorderSubTasksOnServer,
@@ -56,10 +62,13 @@ import {
   completeReminderOnServer,
   setServerUrl,
   setAcknowledgedSyncRevision,
+  getAcknowledgedSyncRevision,
+  setTaskFavoriteOnServer,
   setSyncRequestContext,
   setNavigationExpandedOnServer,
   toggleSubTaskOnServer,
   toggleTaskOnServer,
+  touchTaskRecentOnServer,
   snoozeReminderOnServer,
   uploadAttachmentToServer,
   updateCommentOnServer,
@@ -90,12 +99,23 @@ let reminderCheckRunning = false
 let reminderCheckTimer = null
 let dailyBriefingCheckTimer = null
 let dailyBriefingScheduleTimer = null
+let dailyBriefingTopmostTimer = null
+let isScreenLocked = false
 let saveBoundsTimer = null
 let currentUser = null
 let currentAuthToken = null
 let syncAbortController = null
 let pendingSyncEvent = null
 let latestServerRevision = 0
+let syncStatus = {
+  phase: 'offline',
+  latestRevision: 0,
+  acknowledgedRevision: 0,
+  pendingRevision: null,
+  lastConnectedAt: null,
+  lastSyncedAt: null,
+  lastError: null,
+}
 const syncClientId = randomUUID()
 const activeReminders = new Map()
 const koreanHolidays = new Holidays('KR')
@@ -228,6 +248,26 @@ function configureAutoUpdater() {
   setTimeout(checkForAppUpdate, 10 * 1000)
 }
 
+function getSyncStatus() {
+  return {
+    ...syncStatus,
+    latestRevision: latestServerRevision,
+    acknowledgedRevision: getAcknowledgedSyncRevision(),
+    pendingRevision: pendingSyncEvent
+      ? Number(pendingSyncEvent.revision) || null
+      : null,
+  }
+}
+
+function updateSyncStatus(changes = {}) {
+  syncStatus = { ...syncStatus, ...changes }
+  const status = getSyncStatus()
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('sync:statusChanged', status)
+  }
+  return status
+}
+
 function sendRemoteSyncEvent(event) {
   if (!event || Number(event.revision) <= 0) return
   if (
@@ -235,6 +275,7 @@ function sendRemoteSyncEvent(event) {
     Number(event.revision) > Number(pendingSyncEvent.revision)
   ) {
     pendingSyncEvent = event
+    updateSyncStatus({ phase: 'syncing', lastError: null })
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('sync:remoteChange', pendingSyncEvent)
@@ -248,23 +289,41 @@ function stopSyncEvents() {
 
 async function startSyncEvents() {
   stopSyncEvents()
-  if (!currentAuthToken) return
-
-  try {
-    const revision = await getSyncStateFromServer(currentAuthToken)
-    latestServerRevision = revision
-    setAcknowledgedSyncRevision(revision)
-  } catch (error) {
-    console.error('[Sync] Failed to load initial state:', error)
+  if (!currentAuthToken) {
+    updateSyncStatus({ phase: 'offline' })
     return
   }
 
   const controller = new AbortController()
   syncAbortController = controller
   const token = currentAuthToken
+  updateSyncStatus({ phase: 'connecting', lastError: null })
 
   while (!controller.signal.aborted && token === currentAuthToken) {
     try {
+      updateSyncStatus({ phase: 'connecting', lastError: null })
+      const revision = await getSyncStateFromServer(token)
+      const acknowledgedRevision = getAcknowledgedSyncRevision()
+      latestServerRevision = revision
+      if (revision > Number(pendingSyncEvent?.revision || acknowledgedRevision)) {
+        sendRemoteSyncEvent({
+          revision,
+          sourceClientId: '',
+          method: 'GET',
+          pathname: '/api/sync/state',
+          changedAt: new Date().toISOString(),
+          kind: 'catch-up',
+        })
+      } else if (!pendingSyncEvent) {
+        setAcknowledgedSyncRevision(revision)
+      }
+      updateSyncStatus({
+        phase: pendingSyncEvent ? 'syncing' : 'synced',
+        lastConnectedAt: new Date().toISOString(),
+        lastSyncedAt: pendingSyncEvent ? syncStatus.lastSyncedAt : new Date().toISOString(),
+        lastError: null,
+      })
+
       await streamSyncEventsFromServer(
         token,
         syncClientId,
@@ -279,24 +338,45 @@ async function startSyncEvents() {
           const previousLatestRevision = latestServerRevision
           latestServerRevision = Math.max(latestServerRevision, revision)
           if (event?.kind === 'connected') {
-            // 시작 중 놓친 배포가 있는지 연결/재연결 때 한 번 확인합니다.
             void checkForAppUpdate()
+            updateSyncStatus({
+              phase: pendingSyncEvent ? 'syncing' : 'synced',
+              lastConnectedAt: new Date().toISOString(),
+              lastError: null,
+            })
           }
           if (event?.kind === 'connected' && revision <= previousLatestRevision) {
             return
           }
           if (event?.sourceClientId === syncClientId) {
             setAcknowledgedSyncRevision(revision)
+            if (!pendingSyncEvent) {
+              updateSyncStatus({
+                phase: 'synced',
+                lastSyncedAt: new Date().toISOString(),
+                lastError: null,
+              })
+            }
             return
           }
           if (revision > 0 && revision > Number(pendingSyncEvent?.revision || 0)) {
             sendRemoteSyncEvent(event)
+          } else {
+            updateSyncStatus({})
           }
         },
       )
+      if (!controller.signal.aborted) {
+        updateSyncStatus({ phase: 'offline', lastError: 'SYNC_STREAM_CLOSED' })
+      }
     } catch (error) {
       if (!controller.signal.aborted) {
-        console.error('[Sync] Event stream disconnected:', error)
+        const code = error instanceof Error ? error.message : String(error)
+        console.error('[Sync] Connection failed:', error)
+        updateSyncStatus({
+          phase: syncStatus.lastConnectedAt ? 'offline' : 'failed',
+          lastError: code,
+        })
       }
     }
     if (!controller.signal.aborted) {
@@ -665,23 +745,36 @@ async function createDailyBriefingWindow() {
 }
 
 async function showDailyBriefingWindow(playAlert = true) {
-  if (!currentUser) return
+  if (!currentUser || isScreenLocked) return false
   if (!dailyBriefingWindow || dailyBriefingWindow.isDestroyed()) {
     await createDailyBriefingWindow()
   } else {
     await dailyBriefingWindow.reload()
   }
-  dailyBriefingWindow.showInactive()
+
+  clearTimeout(dailyBriefingTopmostTimer)
+  dailyBriefingWindow.setAlwaysOnTop(true, 'floating')
+  dailyBriefingWindow.show()
+  dailyBriefingWindow.moveTop()
+  dailyBriefingWindow.focus()
   dailyBriefingWindow.flashFrame(true)
+  dailyBriefingTopmostTimer = setTimeout(() => {
+    if (dailyBriefingWindow && !dailyBriefingWindow.isDestroyed()) {
+      dailyBriefingWindow.setAlwaysOnTop(false)
+    }
+  }, 10 * 1000)
+
   if (playAlert) shell.beep()
+  return true
 }
 
 async function checkDailyBriefing() {
   try {
+    if (isScreenLocked) return
     if (!currentUser) {
       await restoreAuthSession()
     }
-    if (!currentUser) return
+    if (!currentUser || isScreenLocked) return
 
     const now = new Date()
     if (!isKoreanBusinessDay(now) || now.getHours() < 8) return
@@ -690,10 +783,31 @@ async function checkDailyBriefing() {
     const userKey = currentUser.id
     if (state.lastShownByUser?.[userKey] === today) return
 
-    await showDailyBriefingWindow(true)
-    markDailyBriefingShown(now)
+    const wasShown = await showDailyBriefingWindow(true)
+    if (wasShown) {
+      markDailyBriefingShown(now)
+    }
   } catch (error) {
     console.error('[Briefing] Failed to show daily popup:', error)
+  }
+}
+
+function handleScreenLock() {
+  isScreenLocked = true
+}
+
+function checkDailyBriefingAfterUnlock() {
+  setTimeout(checkDailyBriefing, 1000)
+}
+
+function handleScreenUnlock() {
+  isScreenLocked = false
+  checkDailyBriefingAfterUnlock()
+}
+
+function handleSystemResume() {
+  if (!isScreenLocked) {
+    checkDailyBriefingAfterUnlock()
   }
 }
 
@@ -808,7 +922,7 @@ function sendTaskUpdated(task) {
   }
 
   mainWindow.webContents.send('app:taskUpdated', {
-    taskId: task.navNodeId,
+    taskId: task.navNodeId ?? task.taskId,
     completed: task.completed,
   })
 }
@@ -898,6 +1012,12 @@ function registerIpcHandlers() {
     pendingSyncEvent = null
     latestServerRevision = 0
     setAcknowledgedSyncRevision(0)
+    updateSyncStatus({
+      phase: 'offline',
+      lastConnectedAt: null,
+      lastSyncedAt: null,
+      lastError: null,
+    })
     saveAuthSession(null)
     activeReminders.clear()
     sendReminderItems()
@@ -912,17 +1032,39 @@ function registerIpcHandlers() {
     return { success: true }
   })
 
-  ipcMain.handle('sync:getState', () => ({
-    pendingEvent: pendingSyncEvent,
-    latestRevision: latestServerRevision,
-  }))
+  ipcMain.handle('sync:getState', () => {
+    requireAuthenticatedUser()
+    return {
+      pendingEvent: pendingSyncEvent,
+      latestRevision: latestServerRevision,
+      status: getSyncStatus(),
+    }
+  })
+  ipcMain.handle('sync:getStatus', () => {
+    requireAuthenticatedUser()
+    return getSyncStatus()
+  })
+  ipcMain.handle('sync:retry', () => {
+    requireAuthenticatedUser()
+    void startSyncEvents()
+    return getSyncStatus()
+  })
   ipcMain.handle('sync:acknowledge', (_event, revision) => {
-    const value = Math.max(0, Number(revision) || 0)
+    requireAuthenticatedUser()
+    const value = Math.min(
+      latestServerRevision,
+      Math.max(0, Number(revision) || 0),
+    )
     setAcknowledgedSyncRevision(value)
     if (pendingSyncEvent && Number(pendingSyncEvent.revision) <= value) {
       pendingSyncEvent = null
     }
-    return { revision: value }
+    updateSyncStatus({
+      phase: pendingSyncEvent ? 'syncing' : 'synced',
+      lastSyncedAt: pendingSyncEvent ? syncStatus.lastSyncedAt : new Date().toISOString(),
+      lastError: null,
+    })
+    return { revision: value, status: getSyncStatus() }
   })
 
   ipcMain.handle('admin:getUsers', async () => {
@@ -984,8 +1126,17 @@ function registerIpcHandlers() {
     })
   }
 
-  handleAuthenticated('navigation:getTree', () =>
-    getNavigationFromServer(currentAuthToken),
+  handleAuthenticated('navigation:getTree', (_event, options = {}) =>
+    getNavigationFromServer(currentAuthToken, options),
+  )
+  handleAuthenticated('navigation:getTrash', () =>
+    getTrashFromServer(currentAuthToken),
+  )
+  handleAuthenticated('navigation:restoreNode', (_event, nodeId) =>
+    restoreNavigationOnServer(currentAuthToken, nodeId),
+  )
+  handleAuthenticated('navigation:permanentlyDeleteNode', (_event, nodeId) =>
+    permanentlyDeleteNavigationOnServer(currentAuthToken, nodeId),
   )
   handleAuthenticated('briefing:getData', (_event, days) =>
     getBriefingFromServer(currentAuthToken, days),
@@ -1062,6 +1213,14 @@ function registerIpcHandlers() {
     ),
   )
 
+  handleAuthenticated('workspace:getTasks', (_event, payload = {}) =>
+    getWorkspaceTasksFromServer(
+      currentAuthToken,
+      payload.view,
+      payload.scope,
+    ),
+  )
+
   handleAuthenticated('task:getDetail', (_event, taskId) =>
     getTaskFromServer(currentAuthToken, taskId),
   )
@@ -1112,6 +1271,29 @@ function registerIpcHandlers() {
 
     return detail
   })
+
+  handleAuthenticated('task:bulkUpdate', async (_event, payload) => {
+    const tasks = await bulkUpdateTasksOnServer(
+      currentAuthToken,
+      payload.taskIds,
+      payload.changes,
+    )
+    tasks.forEach((task) => {
+      if (task.completed) removeActiveRemindersForTask(task.taskId)
+      sendTaskUpdated(task)
+    })
+    return tasks
+  })
+  handleAuthenticated('task:setFavorite', (_event, payload) =>
+    setTaskFavoriteOnServer(
+      currentAuthToken,
+      payload.taskId,
+      payload.isFavorite,
+    ),
+  )
+  handleAuthenticated('task:touchRecent', (_event, taskId) =>
+    touchTaskRecentOnServer(currentAuthToken, taskId),
+  )
 
   handleAuthenticated('user:getAssignees', () =>
     getAssigneesFromServer(currentAuthToken),
@@ -1290,6 +1472,7 @@ app.whenReady().then(async () => {
 
   await restoreAuthSession()
   registerIpcHandlers()
+  Menu.setApplicationMenu(null)
 
   if (process.platform === 'win32' && app.isPackaged) {
     app.setLoginItemSettings({
@@ -1302,6 +1485,9 @@ app.whenReady().then(async () => {
   createTray()
   createMainWindow(!startedHidden)
   configureAutoUpdater()
+  powerMonitor.on('lock-screen', handleScreenLock)
+  powerMonitor.on('unlock-screen', handleScreenUnlock)
+  powerMonitor.on('resume', handleSystemResume)
   reminderCheckTimer = setInterval(checkDueReminders, 30 * 1000)
   dailyBriefingCheckTimer = setInterval(checkDailyBriefing, 60 * 1000)
   scheduleNextDailyBriefingCheck()
@@ -1317,7 +1503,11 @@ app.on('before-quit', () => {
   clearInterval(reminderCheckTimer)
   clearInterval(dailyBriefingCheckTimer)
   clearTimeout(dailyBriefingScheduleTimer)
+  clearTimeout(dailyBriefingTopmostTimer)
   clearTimeout(saveBoundsTimer)
+  powerMonitor.removeListener('lock-screen', handleScreenLock)
+  powerMonitor.removeListener('unlock-screen', handleScreenUnlock)
+  powerMonitor.removeListener('resume', handleSystemResume)
   saveReminderBounds()
   stopSyncEvents()
 })

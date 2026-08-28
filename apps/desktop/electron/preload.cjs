@@ -44,7 +44,14 @@ contextBridge.exposeInMainWorld('api', {
   },
   sync: {
     getState: () => ipcRenderer.invoke('sync:getState'),
+    getStatus: () => ipcRenderer.invoke('sync:getStatus'),
+    retry: () => ipcRenderer.invoke('sync:retry'),
     acknowledge: (revision) => ipcRenderer.invoke('sync:acknowledge', revision),
+    onStatusChanged: (callback) => {
+      const listener = (_event, status) => callback(status)
+      ipcRenderer.on('sync:statusChanged', listener)
+      return () => ipcRenderer.removeListener('sync:statusChanged', listener)
+    },
     onRemoteChange: (callback) => {
       const listener = (_event, change) => callback(change)
       ipcRenderer.on('sync:remoteChange', listener)
@@ -52,7 +59,11 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   navigation: {
-    getTree: () => ipcRenderer.invoke('navigation:getTree'),
+    getTree: (options = {}) => ipcRenderer.invoke('navigation:getTree', options),
+    getTrash: () => ipcRenderer.invoke('navigation:getTrash'),
+    restoreNode: (nodeId) => ipcRenderer.invoke('navigation:restoreNode', nodeId),
+    permanentlyDeleteNode: (nodeId) =>
+      ipcRenderer.invoke('navigation:permanentlyDeleteNode', nodeId),
     createFolder: (title, parentId) =>
       ipcRenderer.invoke('navigation:createFolder', { title, parentId }),
     createTask: (title, parentId) =>
@@ -76,11 +87,20 @@ contextBridge.exposeInMainWorld('api', {
     setExpanded: (nodeId, expanded) =>
       ipcRenderer.invoke('navigation:setExpanded', { nodeId, expanded }),
   },
+  workspace: {
+    getTasks: (view, scope = 'all') =>
+      ipcRenderer.invoke('workspace:getTasks', { view, scope }),
+  },
   task: {
     getDetail: (taskId) => ipcRenderer.invoke('task:getDetail', taskId),
     toggleCompleted: (taskId) => ipcRenderer.invoke('task:toggleCompleted', taskId),
     updateDetail: (taskId, changes) =>
       ipcRenderer.invoke('task:updateDetail', { taskId, changes }),
+    bulkUpdate: (taskIds, changes) =>
+      ipcRenderer.invoke('task:bulkUpdate', { taskIds, changes }),
+    setFavorite: (taskId, isFavorite) =>
+      ipcRenderer.invoke('task:setFavorite', { taskId, isFavorite }),
+    touchRecent: (taskId) => ipcRenderer.invoke('task:touchRecent', taskId),
   },
   user: {
     getAssignees: () => ipcRenderer.invoke('user:getAssignees'),

@@ -345,7 +345,7 @@ function AdminUserManager({
             <div className="confirm-modal">
               <div className="confirm-modal-title">사용자 삭제 확인</div>
               <div className="confirm-modal-body">
-                “{deleteTarget.name}” 사용자를 삭제하시겠습니까?
+                “{deleteTarget.name}” 사용자를 정말 삭제하시겠습니까?
                 <br />
                 작성하거나 담당하는 기존 데이터가 있으면 삭제되지 않습니다.
                 {isLoadingReferences && (

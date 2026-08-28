@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   authenticateUser,
+  bulkUpdateTasks,
   copyNavigationNode,
   createComment,
   createAttachment,
@@ -31,6 +32,8 @@ import {
   getMemos,
   getDueDesktopReminders,
   getNavigationTree,
+  getTrashNodes,
+  getWorkspaceTasks,
   getBriefingData,
   getSessionUser,
   getSubTasks,
@@ -38,6 +41,8 @@ import {
   initializeDb,
   markReminderSent,
   moveNavigationNode,
+  permanentlyDeleteNavigationNode,
+  restoreNavigationNode,
   moveNavigationNodeByDirection,
   renameNavigationNode,
   reorderSubTasks,
@@ -45,6 +50,8 @@ import {
   saveMemo,
   snoozeReminderForUser,
   setNavigationNodeExpanded,
+  setTaskFavorite,
+  touchTaskRecent,
   toggleTaskCompleted,
   toggleSubTask,
   updateComment,
@@ -57,7 +64,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '0.9.8-beta.0'
+const serverVersion = '1.0.0'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -250,6 +257,7 @@ function describeMutation(context, body) {
   if (
     pathname.startsWith('/api/admin/') ||
     pathname.includes('/expanded') ||
+    /^\/api\/tasks\/[^/]+\/(favorite|recent)$/.test(pathname) ||
     /^\/api\/reminders\/[^/]+\/(snooze|dismiss)$/.test(pathname)
   ) {
     return null
@@ -265,10 +273,14 @@ function describeMutation(context, body) {
   const subTaskMatch = pathname.match(/^\/api\/subtasks\/([^/]+)(?:\/toggle)?$/)
   const memoMatch = pathname.match(/^\/api\/memos\/([^/]+)$/)
   const commentMatch = pathname.match(/^\/api\/comments\/([^/]+)$/)
-  const navigationMatch = pathname.match(/^\/api\/navigation\/nodes\/([^/]+)(?:\/(title|move|copy|reorder))?$/)
+  const navigationMatch = pathname.match(/^\/api\/navigation\/nodes\/([^/]+)(?:\/(title|move|copy|reorder|restore|permanent))?$/)
   const reminderCompleteMatch = pathname.match(/^\/api\/reminders\/([^/]+)\/complete$/)
 
-  if (pathname === '/api/navigation/tasks') {
+  if (pathname === '/api/tasks/bulk') {
+    entityType = 'task'
+    actionType = 'updated'
+    summary = `${body?.tasks?.length || 0}개 Task가 일괄 변경되었습니다.`
+  } else if (pathname === '/api/navigation/tasks') {
     entityType = 'task'
     entityId = body?.task?.id || null
     taskId = entityId
@@ -286,7 +298,13 @@ function describeMutation(context, body) {
     entityType = 'navigation'
     entityId = decodeURIComponent(navigationMatch[1])
     const action = navigationMatch[2]
-    if (method === 'DELETE') summary = '업무 또는 폴더가 삭제되었습니다.'
+    if (action === 'restore') {
+      actionType = 'restored'
+      summary = '휴지통의 업무 또는 폴더가 복원되었습니다.'
+    } else if (action === 'permanent') {
+      actionType = 'deleted'
+      summary = '휴지통의 업무 또는 폴더가 영구 삭제되었습니다.'
+    } else if (method === 'DELETE') summary = '업무 또는 폴더가 삭제되었습니다.'
     else if (action === 'title') summary = '이름이 변경되었습니다.'
     else if (action === 'copy') {
       actionType = 'copied'
@@ -446,6 +464,9 @@ function isSynchronizedMutation(method, pathname) {
   if (!pathname.startsWith('/api/')) return false
   if (pathname.startsWith('/api/auth/')) return false
   if (/^\/api\/reminders\/[^/]+\/(snooze|dismiss)$/.test(pathname)) {
+    return false
+  }
+  if (/^\/api\/tasks\/[^/]+\/(favorite|recent)$/.test(pathname)) {
     return false
   }
   return true
@@ -645,7 +666,23 @@ function getErrorStatus(code) {
     code.includes('required') ||
     code.includes('must be') ||
     code.startsWith('ADMIN_CANNOT') ||
-    code === 'LAST_ADMIN_REQUIRED'
+    code === 'LAST_ADMIN_REQUIRED' ||
+    code === 'INVALID_TASK_PRIORITY' ||
+    code === 'INVALID_WORKFLOW_STATUS' ||
+    code === 'INVALID_WORKSPACE_VIEW' ||
+    code === 'INVALID_WORKSPACE_SCOPE' ||
+    code === 'TASK_BULK_SIZE_INVALID' ||
+    code === 'TASK_BULK_CHANGES_REQUIRED' ||
+    code === 'TASK_BULK_TARGET_NOT_FOUND' ||
+    code === 'TASK_BULK_TARGET_INVALID' ||
+    code === 'INVALID_TASK_TAGS' ||
+    code === 'INVALID_TASK_DUE_DATE' ||
+    code === 'INVALID_TASK_COMPLETED' ||
+    code === 'INVALID_TASK_ASSIGNEES' ||
+    code === 'INVALID_TASK_PARENT' ||
+    code === 'INVALID_TASK_FAVORITE' ||
+    code === 'ASSIGNEE_USER_NOT_FOUND' ||
+    code === 'TARGET_FOLDER_NOT_FOUND'
   ) {
     return 400
   }
@@ -725,6 +762,19 @@ async function handleRequest(request, response) {
     return
   }
 
+  if (method === 'GET' && pathname === '/api/workspace/tasks') {
+    const session = requireSession(request)
+    const view = String(url.searchParams.get('view') || 'incomplete')
+    const scope = String(url.searchParams.get('scope') || 'all')
+    if (!['all', 'mine'].includes(scope)) {
+      throw new Error('INVALID_WORKSPACE_SCOPE')
+    }
+    sendJson(response, 200, {
+      tasks: getWorkspaceTasks(session.user.id, view, scope),
+    })
+    return
+  }
+
   if (method === 'GET' && pathname === '/api/briefing') {
     const session = requireSession(request)
     const days = Number(url.searchParams.get('days') || 7)
@@ -760,8 +810,24 @@ async function handleRequest(request, response) {
   }
 
   if (method === 'GET' && pathname === '/api/navigation') {
-    requireSession(request)
-    sendJson(response, 200, { nodes: getNavigationTree() })
+    const session = requireSession(request)
+    const query = String(url.searchParams.get('query') || '')
+    const scope = String(url.searchParams.get('scope') || 'all')
+    if (!['all', 'mine'].includes(scope)) {
+      throw new Error('INVALID_WORKSPACE_SCOPE')
+    }
+    sendJson(response, 200, {
+      nodes: getNavigationTree({
+        query,
+        assignedUserId: scope === 'mine' ? session.user.id : '',
+      }),
+    })
+    return
+  }
+
+  if (method === 'GET' && pathname === '/api/navigation/trash') {
+    const session = requireSession(request)
+    sendJson(response, 200, { nodes: getTrashNodes(session.user.id) })
     return
   }
 
@@ -802,10 +868,10 @@ async function handleRequest(request, response) {
   }
 
   const navigationNodeMatch = pathname.match(
-    /^\/api\/navigation\/nodes\/([^/]+)(?:\/(title|move|copy|reorder|expanded))?$/,
+    /^\/api\/navigation\/nodes\/([^/]+)(?:\/(title|move|copy|reorder|expanded|restore|permanent))?$/,
   )
   if (navigationNodeMatch) {
-    requireSession(request)
+    const session = requireSession(request)
     const nodeId = decodeURIComponent(navigationNodeMatch[1])
     const action = navigationNodeMatch[2]
 
@@ -819,6 +885,20 @@ async function handleRequest(request, response) {
 
     if (method === 'DELETE' && !action) {
       sendJson(response, 200, { result: deleteNavigationNode(nodeId) })
+      return
+    }
+
+    if (method === 'POST' && action === 'restore') {
+      sendJson(response, 200, {
+        result: restoreNavigationNode(nodeId, session.user.id),
+      })
+      return
+    }
+
+    if (method === 'DELETE' && action === 'permanent') {
+      sendJson(response, 200, {
+        result: permanentlyDeleteNavigationNode(nodeId, session.user.id),
+      })
       return
     }
 
@@ -1126,6 +1206,40 @@ async function handleRequest(request, response) {
 
     if (method === 'DELETE') {
       sendJson(response, 200, { comment: deleteComment(commentId) })
+      return
+    }
+  }
+
+  if (method === 'PUT' && pathname === '/api/tasks/bulk') {
+    const session = requireSession(request)
+    const body = await readJson(request)
+    sendJson(response, 200, {
+      tasks: bulkUpdateTasks(session.user.id, body.taskIds, body.changes),
+    })
+    return
+  }
+
+  const taskPersonalStateMatch = pathname.match(
+    /^\/api\/tasks\/([^/]+)\/(favorite|recent)$/,
+  )
+  if (taskPersonalStateMatch) {
+    const session = requireSession(request)
+    const taskId = decodeURIComponent(taskPersonalStateMatch[1])
+    const action = taskPersonalStateMatch[2]
+    if (method === 'PUT' && action === 'favorite') {
+      const body = await readJson(request)
+      if (typeof body.isFavorite !== 'boolean') {
+        throw new Error('INVALID_TASK_FAVORITE')
+      }
+      sendJson(response, 200, {
+        state: setTaskFavorite(session.user.id, taskId, body.isFavorite),
+      })
+      return
+    }
+    if (method === 'POST' && action === 'recent') {
+      sendJson(response, 200, {
+        state: touchTaskRecent(session.user.id, taskId),
+      })
       return
     }
   }

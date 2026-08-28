@@ -135,6 +135,143 @@ export function getDb() {
   return dbInstance
 }
 
+function migrateCompositeAssigneeUsers(db) {
+  const compositeUsers = db.prepare(`
+    SELECT id, name
+    FROM users
+    WHERE login_id IS NULL AND name LIKE '%,%'
+  `).all()
+
+  if (compositeUsers.length === 0) return
+
+  const findManagedUsers = db.prepare(`
+    SELECT id, name, email
+    FROM users
+    WHERE
+      login_id IS NOT NULL
+      AND is_active = 1
+      AND name = ? COLLATE NOCASE
+  `)
+  const taskLinks = db.prepare(`
+    SELECT task_detail_id AS taskDetailId, order_index AS orderIndex
+    FROM task_assignees
+    WHERE user_id = ?
+  `)
+  const subTaskLinks = db.prepare(`
+    SELECT sub_task_id AS subTaskId, order_index AS orderIndex
+    FROM sub_task_assignees
+    WHERE user_id = ?
+  `)
+  const deleteTaskLink = db.prepare(`
+    DELETE FROM task_assignees
+    WHERE task_detail_id = ? AND user_id = ?
+  `)
+  const deleteSubTaskLink = db.prepare(`
+    DELETE FROM sub_task_assignees
+    WHERE sub_task_id = ? AND user_id = ?
+  `)
+  const insertTaskLink = db.prepare(`
+    INSERT OR IGNORE INTO task_assignees (
+      task_detail_id, user_id, order_index
+    ) VALUES (?, ?, ?)
+  `)
+  const insertSubTaskLink = db.prepare(`
+    INSERT OR IGNORE INTO sub_task_assignees (
+      sub_task_id, user_id, order_index
+    ) VALUES (?, ?, ?)
+  `)
+  const hasRemainingReferences = db.prepare(`
+    SELECT (
+      EXISTS(SELECT 1 FROM nav_nodes WHERE owner_user_id = @userId)
+      OR EXISTS(
+        SELECT 1 FROM task_details
+        WHERE assignee_user_id = @userId OR memo_author_user_id = @userId
+      )
+      OR EXISTS(SELECT 1 FROM task_assignees WHERE user_id = @userId)
+      OR EXISTS(SELECT 1 FROM sub_tasks WHERE assignee_user_id = @userId)
+      OR EXISTS(SELECT 1 FROM sub_task_assignees WHERE user_id = @userId)
+      OR EXISTS(SELECT 1 FROM memos WHERE author_user_id = @userId)
+      OR EXISTS(SELECT 1 FROM comments WHERE author_user_id = @userId)
+      OR EXISTS(SELECT 1 FROM attachments WHERE uploaded_by_user_id = @userId)
+      OR EXISTS(SELECT 1 FROM reminder_user_states WHERE user_id = @userId)
+      OR EXISTS(SELECT 1 FROM auth_sessions WHERE user_id = @userId)
+      OR EXISTS(SELECT 1 FROM activity_logs WHERE actor_user_id = @userId)
+    ) AS referenced
+  `)
+
+  const migrate = db.transaction(() => {
+    let migratedCount = 0
+
+    compositeUsers.forEach((compositeUser) => {
+      const names = Array.from(new Map(
+        compositeUser.name
+          .split(',')
+          .map((name) => name.trim())
+          .filter(Boolean)
+          .map((name) => [name.toLocaleLowerCase(), name]),
+      ).values())
+      if (names.length < 2) return
+
+      const managedUsers = []
+      for (const name of names) {
+        const matches = findManagedUsers.all(name)
+        if (matches.length !== 1) return
+        managedUsers.push(matches[0])
+      }
+      if (new Set(managedUsers.map((user) => user.id)).size < 2) return
+
+      taskLinks.all(compositeUser.id).forEach((link) => {
+        deleteTaskLink.run(link.taskDetailId, compositeUser.id)
+        managedUsers.forEach((user, index) => {
+          insertTaskLink.run(
+            link.taskDetailId,
+            user.id,
+            link.orderIndex + index,
+          )
+        })
+      })
+      subTaskLinks.all(compositeUser.id).forEach((link) => {
+        deleteSubTaskLink.run(link.subTaskId, compositeUser.id)
+        managedUsers.forEach((user, index) => {
+          insertSubTaskLink.run(
+            link.subTaskId,
+            user.id,
+            link.orderIndex + index,
+          )
+        })
+      })
+
+      db.prepare(`
+        UPDATE task_details
+        SET assignee_user_id = ?
+        WHERE assignee_user_id = ?
+      `).run(managedUsers[0].id, compositeUser.id)
+      db.prepare(`
+        UPDATE sub_tasks
+        SET assignee_user_id = ?
+        WHERE assignee_user_id = ?
+      `).run(managedUsers[0].id, compositeUser.id)
+
+      const references = hasRemainingReferences.get({
+        userId: compositeUser.id,
+      })
+      if (!references.referenced) {
+        db.prepare(`DELETE FROM users WHERE id = ?`).run(compositeUser.id)
+      }
+      migratedCount += 1
+    })
+
+    return migratedCount
+  })
+
+  const migratedCount = migrate()
+  if (migratedCount > 0) {
+    console.info(
+      `[DB] Migrated ${migratedCount} composite assignee user(s).`,
+    )
+  }
+}
+
 export function initializeDb() {
   const db = getDb()
 
@@ -163,6 +300,7 @@ export function initializeDb() {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME NULL,
+      deleted_batch_id TEXT NULL,
       FOREIGN KEY (parent_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
       FOREIGN KEY (owner_user_id) REFERENCES users(id)
     );
@@ -178,6 +316,9 @@ export function initializeDb() {
       memo_author_user_id TEXT NULL,
       memo_updated_at DATETIME NULL,
       completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+      priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+      workflow_status TEXT NOT NULL DEFAULT 'todo' CHECK (workflow_status IN ('todo', 'in_progress', 'blocked', 'done')),
+      tags_json TEXT NOT NULL DEFAULT '[]',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (nav_node_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
@@ -294,6 +435,17 @@ export function initializeDb() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS user_task_state (
+      user_id TEXT NOT NULL,
+      nav_node_id TEXT NOT NULL,
+      is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1)),
+      last_opened_at DATETIME NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, nav_node_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (nav_node_id) REFERENCES nav_nodes(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS auth_sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -330,6 +482,12 @@ export function initializeDb() {
 
     CREATE INDEX IF NOT EXISTS idx_nav_nodes_owner_user
       ON nav_nodes(owner_user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_user_task_state_recent
+      ON user_task_state(user_id, last_opened_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_user_task_state_favorite
+      ON user_task_state(user_id, is_favorite, updated_at DESC);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_task_details_nav_node
       ON task_details(nav_node_id);
@@ -425,6 +583,66 @@ export function initializeDb() {
   if (!currentTaskDetailColumns.has('memo_updated_at')) {
     db.exec(`ALTER TABLE task_details ADD COLUMN memo_updated_at DATETIME NULL`)
   }
+  if (!currentTaskDetailColumns.has('priority')) {
+    db.exec(`ALTER TABLE task_details ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent'))`)
+  }
+  if (!currentTaskDetailColumns.has('workflow_status')) {
+    db.exec(`ALTER TABLE task_details ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'todo' CHECK (workflow_status IN ('todo', 'in_progress', 'blocked', 'done'))`)
+  }
+  if (!currentTaskDetailColumns.has('tags_json')) {
+    db.exec(`ALTER TABLE task_details ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`)
+  }
+  db.exec(`
+    UPDATE task_details
+    SET workflow_status = 'done'
+    WHERE completed = 1 AND workflow_status <> 'done';
+
+    UPDATE task_details
+    SET completed = 1
+    WHERE workflow_status = 'done' AND completed <> 1;
+  `)
+
+  const navNodeColumns = new Set(
+    db.prepare(`PRAGMA table_info(nav_nodes)`).all().map((column) => column.name),
+  )
+  if (!navNodeColumns.has('deleted_batch_id')) {
+    db.exec(`ALTER TABLE nav_nodes ADD COLUMN deleted_batch_id TEXT NULL`)
+  }
+  const backfillLegacyTrash = db.transaction(() => {
+    const roots = db.prepare(`
+      SELECT node.id
+      FROM nav_nodes AS node
+      LEFT JOIN nav_nodes AS parent ON parent.id = node.parent_id
+      WHERE node.deleted_at IS NOT NULL
+        AND node.deleted_batch_id IS NULL
+        AND (
+          parent.id IS NULL
+          OR parent.deleted_at IS NULL
+          OR parent.deleted_batch_id IS NOT NULL
+        )
+      ORDER BY node.deleted_at, node.id
+    `).all()
+    const assignBatch = db.prepare(`
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM nav_nodes
+        WHERE id = ? AND deleted_at IS NOT NULL AND deleted_batch_id IS NULL
+        UNION ALL
+        SELECT child.id
+        FROM nav_nodes AS child
+        JOIN subtree AS parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NOT NULL AND child.deleted_batch_id IS NULL
+      )
+      UPDATE nav_nodes
+      SET deleted_batch_id = ?
+      WHERE id IN (SELECT id FROM subtree)
+    `)
+    roots.forEach((root) => assignBatch.run(root.id, randomUUID()))
+  })
+  backfillLegacyTrash()
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_nav_nodes_deleted_batch
+      ON nav_nodes(deleted_batch_id, deleted_at);
+  `)
 
   const userCount = db.prepare(`SELECT COUNT(*) AS count FROM users`).get()
   if (userCount.count === 0) {
@@ -540,6 +758,8 @@ export function initializeDb() {
     FROM sub_tasks
     WHERE assignee_user_id IS NOT NULL;
   `)
+
+  migrateCompositeAssigneeUsers(db)
 
   const legacyMemoRows = db.prepare(`
     SELECT
@@ -939,8 +1159,54 @@ export function getManagedUserReferences(userId) {
   }
 }
 
-export function getNavigationTree() {
+function escapeLikePattern(value) {
+  return value.replace(/[\\%_]/g, '\\$&')
+}
+
+const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
+const WORKFLOW_STATUSES = new Set(['todo', 'in_progress', 'blocked', 'done'])
+
+function normalizeTags(value) {
+  const source = Array.isArray(value) ? value : []
+  return Array.from(new Set(
+    source.map((tag) => String(tag ?? '').trim()).filter(Boolean),
+  ))
+}
+
+function parseTagsJson(value) {
+  try {
+    return normalizeTags(JSON.parse(String(value || '[]')))
+  } catch {
+    return []
+  }
+}
+
+function createSearchSnippet(value, query) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+  const normalizedQuery = String(query ?? '').toLocaleLowerCase()
+  const matchIndex = text.toLocaleLowerCase().indexOf(normalizedQuery)
+  if (!text || !normalizedQuery || matchIndex < 0) {
+    return { snippet: text.slice(0, 180), highlights: [] }
+  }
+  const start = Math.max(0, matchIndex - 60)
+  const end = Math.min(text.length, matchIndex + query.length + 100)
+  const snippet = text.slice(start, end)
+  return {
+    snippet,
+    highlights: [{
+      start: Math.max(0, matchIndex - start),
+      end: Math.min(
+        snippet.length,
+        Math.max(0, matchIndex - start) + String(query).length,
+      ),
+    }],
+  }
+}
+
+export function getNavigationTree(options = {}) {
   const db = getDb()
+  const query = String(options.query ?? '').trim().slice(0, 120)
+  const assignedUserId = String(options.assignedUserId ?? '').trim()
 
   const rows = db.prepare(`
     SELECT
@@ -958,11 +1224,242 @@ export function getNavigationTree() {
     ORDER BY nav_node.parent_id, nav_node.order_index
   `).all()
 
-  return rows.map((row) => ({
+  const normalizedRows = rows.map((row) => ({
     ...row,
     expanded: Boolean(row.expanded),
     completed: Boolean(row.completed),
+    searchHits: [],
   }))
+  if (!query && !assignedUserId) return normalizedRows
+
+  const nodeMap = new Map(normalizedRows.map((node) => [node.id, node]))
+  const allTaskIds = normalizedRows
+    .filter((node) => node.type === 'task')
+    .map((node) => node.id)
+  const taskIdsInScope = assignedUserId
+    ? new Set(db.prepare(`
+        SELECT task_detail.nav_node_id AS taskId
+        FROM task_assignees AS task_assignee
+        JOIN task_details AS task_detail
+          ON task_detail.id = task_assignee.task_detail_id
+        JOIN nav_nodes AS nav_node
+          ON nav_node.id = task_detail.nav_node_id
+        WHERE
+          task_assignee.user_id = ?
+          AND nav_node.deleted_at IS NULL
+      `).all(assignedUserId).map((row) => row.taskId))
+    : new Set(allTaskIds)
+  const includedNodeIds = new Set()
+  const matchKindsByNode = new Map()
+  const searchHitsByNode = new Map()
+
+  const includeWithAncestors = (nodeId) => {
+    const visited = new Set()
+    let current = nodeMap.get(nodeId)
+    while (current && !visited.has(current.id)) {
+      includedNodeIds.add(current.id)
+      visited.add(current.id)
+      current = current.parentId ? nodeMap.get(current.parentId) : null
+    }
+  }
+  const addMatchKind = (nodeId, kind) => {
+    const kinds = matchKindsByNode.get(nodeId) ?? new Set()
+    kinds.add(kind)
+    matchKindsByNode.set(nodeId, kinds)
+  }
+  const addSearchHit = (nodeId, entityType, entityId, kind, value) => {
+    const { snippet, highlights } = createSearchSnippet(value, query)
+    if (highlights.length === 0) return
+    const hits = searchHitsByNode.get(nodeId) ?? []
+    const resultId = [nodeId, entityType, entityId, kind].join(':')
+    if (!hits.some((hit) => hit.resultId === resultId)) {
+      hits.push({
+        resultId,
+        taskId: entityType === 'folder' ? null : nodeId,
+        entityType,
+        entityId,
+        matchKind: kind,
+        snippet,
+        highlights,
+      })
+      searchHitsByNode.set(nodeId, hits)
+    }
+    addMatchKind(nodeId, kind)
+  }
+
+  if (!query) {
+    taskIdsInScope.forEach(includeWithAncestors)
+  } else {
+    const normalizedQuery = query.toLocaleLowerCase()
+    const pattern = `%${escapeLikePattern(query)}%`
+    const contentMatches = db.prepare(`
+      SELECT
+        task_detail.nav_node_id AS taskId,
+        'description' AS entityType,
+        task_detail.id AS entityId,
+        'Task 설명' AS kind,
+        COALESCE(task_detail.description, '') AS value
+      FROM task_details AS task_detail
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+        AND COALESCE(task_detail.description, '') LIKE ? ESCAPE '\\' COLLATE NOCASE
+
+      UNION ALL
+
+      SELECT task_detail.nav_node_id, 'subtask', sub_task.id, 'Sub Task', sub_task.title
+      FROM sub_tasks AS sub_task
+      JOIN task_details AS task_detail ON task_detail.id = sub_task.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+        AND sub_task.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+
+      UNION ALL
+
+      SELECT task_detail.nav_node_id, 'comment', comment.id, '댓글', comment.content
+      FROM comments AS comment
+      JOIN task_details AS task_detail ON task_detail.id = comment.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+        AND comment.is_deleted = 0
+        AND comment.content LIKE ? ESCAPE '\\' COLLATE NOCASE
+
+      UNION ALL
+
+      SELECT task_detail.nav_node_id, 'attachment', attachment.id, '첨부파일', attachment.original_name
+      FROM attachments AS attachment
+      JOIN task_details AS task_detail ON task_detail.id = attachment.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+        AND attachment.original_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+
+      UNION ALL
+
+      SELECT task_detail.nav_node_id, 'assignee', user.id, '담당자', user.name
+      FROM task_assignees AS task_assignee
+      JOIN users AS user ON user.id = task_assignee.user_id
+      JOIN task_details AS task_detail ON task_detail.id = task_assignee.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+        AND user.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+    `).all(pattern, pattern, pattern, pattern, pattern)
+    db.prepare(`
+      SELECT
+        task_detail.nav_node_id AS taskId,
+        memo.id AS entityId,
+        memo.content_html AS contentHtml
+      FROM memos AS memo
+      JOIN task_details AS task_detail ON task_detail.id = memo.task_detail_id
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+    `).all().forEach((memo) => {
+      const value = memoHtmlToPlainText(memo.contentHtml)
+      if (value.toLocaleLowerCase().includes(normalizedQuery)) {
+        contentMatches.push({
+          taskId: memo.taskId,
+          entityType: 'memo',
+          entityId: memo.entityId,
+          kind: '메모',
+          value,
+        })
+      }
+    })
+    db.prepare(`
+      SELECT
+        task_detail.nav_node_id AS taskId,
+        task_detail.id AS entityId,
+        task_detail.tags_json AS tagsJson
+      FROM task_details AS task_detail
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE nav_node.deleted_at IS NULL
+    `).all().forEach((task) => {
+      parseTagsJson(task.tagsJson).forEach((tag) => {
+        if (tag.toLocaleLowerCase().includes(normalizedQuery)) {
+          contentMatches.push({
+            taskId: task.taskId,
+            entityType: 'tags',
+            entityId: task.entityId,
+            kind: '태그',
+            value: tag,
+          })
+        }
+      })
+    })
+
+    normalizedRows.forEach((node) => {
+      if (
+        node.type === 'task'
+        && taskIdsInScope.has(node.id)
+        && node.title.toLocaleLowerCase().includes(normalizedQuery)
+      ) {
+        addSearchHit(node.id, 'task', node.id, 'Task 이름', node.title)
+      }
+    })
+    contentMatches.forEach((match) => {
+      if (taskIdsInScope.has(match.taskId)) {
+        addSearchHit(
+          match.taskId,
+          match.entityType,
+          match.entityId,
+          match.kind,
+          match.value,
+        )
+      }
+    })
+
+    const scopedTreeNodeIds = new Set()
+    taskIdsInScope.forEach((taskId) => {
+      const visited = new Set()
+      let current = nodeMap.get(taskId)
+      while (current && !visited.has(current.id)) {
+        scopedTreeNodeIds.add(current.id)
+        visited.add(current.id)
+        current = current.parentId ? nodeMap.get(current.parentId) : null
+      }
+    })
+    const matchingFolderIds = new Set(
+      normalizedRows
+        .filter((node) => (
+          node.type === 'folder'
+          && (!assignedUserId || scopedTreeNodeIds.has(node.id))
+          && node.title.toLocaleLowerCase().includes(normalizedQuery)
+        ))
+        .map((node) => node.id),
+    )
+
+    matchingFolderIds.forEach((folderId) => {
+      const folder = nodeMap.get(folderId)
+      addSearchHit(folderId, 'folder', folderId, '폴더 이름', folder?.title ?? '')
+      includeWithAncestors(folderId)
+    })
+    taskIdsInScope.forEach((taskId) => {
+      const visited = new Set()
+      let current = nodeMap.get(taskId)
+      let isInsideMatchingFolder = false
+      while (current && !visited.has(current.id)) {
+        if (matchingFolderIds.has(current.id)) {
+          isInsideMatchingFolder = true
+          break
+        }
+        visited.add(current.id)
+        current = current.parentId ? nodeMap.get(current.parentId) : null
+      }
+      if (isInsideMatchingFolder) {
+        addMatchKind(taskId, '일치 폴더 내 Task')
+        includeWithAncestors(taskId)
+      }
+    })
+    matchKindsByNode.forEach((_kinds, nodeId) => includeWithAncestors(nodeId))
+  }
+
+  return normalizedRows
+    .filter((node) => includedNodeIds.has(node.id))
+    .map((node) => ({
+      ...node,
+      matchKinds: query
+        ? Array.from(matchKindsByNode.get(node.id) ?? [])
+        : [],
+      searchHits: query ? (searchHitsByNode.get(node.id) ?? []) : [],
+    }))
 }
 
 
@@ -1108,30 +1605,21 @@ function getAssigneeDisplay(assignees) {
   return assignees.map((assignee) => assignee.name).join(', ')
 }
 
-function findOrCreateAssigneeUser(db, identifier) {
+function findManagedAssigneeUser(db, identifier) {
   const value = String(identifier ?? '').trim()
   if (!value) {
     return null
   }
 
-  let user = db.prepare(`
+  return db.prepare(`
     SELECT id, name, email
     FROM users
-    WHERE id = ? OR name = ? COLLATE NOCASE
+    WHERE
+      (id = ? OR name = ? COLLATE NOCASE)
+      AND login_id IS NOT NULL
+      AND is_active = 1
     LIMIT 1
-  `).get(value, value)
-
-  if (!user) {
-    const userId = `user-${randomUUID()}`
-    const email = `local-${randomUUID()}@todo.local`
-    db.prepare(`
-      INSERT INTO users (id, name, email)
-      VALUES (?, ?, ?)
-    `).run(userId, value, email)
-    user = { id: userId, name: value, email }
-  }
-
-  return user
+  `).get(value, value) ?? null
 }
 
 function replaceTaskAssignees(db, taskDetailId, assignees) {
@@ -1163,7 +1651,10 @@ export function getTaskDetail(taskId) {
       COALESCE(task_detail.description, '') AS description,
       COALESCE(task_detail.due_date, '') AS dueDate,
       COALESCE(task_detail.alarm_at, '') AS alarm,
-      task_detail.completed
+      task_detail.completed,
+      task_detail.priority,
+      task_detail.workflow_status AS workflowStatus,
+      task_detail.tags_json AS tagsJson
     FROM task_details AS task_detail
     JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
     WHERE task_detail.nav_node_id = ? AND nav_node.deleted_at IS NULL
@@ -1186,6 +1677,9 @@ export function getTaskDetail(taskId) {
     assignee: getAssigneeDisplay(assignees),
     assignees,
     completed: Boolean(detail.completed),
+    priority: detail.priority,
+    workflowStatus: detail.workflowStatus,
+    tags: parseTagsJson(detail.tagsJson),
     attachments,
   }
 }
@@ -1207,6 +1701,7 @@ export function toggleTaskCompleted(taskId) {
       UPDATE task_details
       SET
         completed = CASE completed WHEN 1 THEN 0 ELSE 1 END,
+        workflow_status = CASE completed WHEN 1 THEN 'todo' ELSE 'done' END,
         updated_at = CURRENT_TIMESTAMP
       WHERE nav_node_id = ?
     `).run(taskId)
@@ -1350,53 +1845,110 @@ export function dismissReminderForUser(reminderId, userId) {
 
 export function updateTaskDetail(taskId, changes) {
   const db = getDb()
-  const title = String(changes?.title ?? '').trim()
-  const description = String(changes?.description ?? '').trim()
-  const dueDate = String(changes?.dueDate ?? '').trim()
-  const alarm = String(changes?.alarm ?? '').trim().replace('T', ' ')
-
-  if (!title) {
-    throw new Error('Task title is required')
-  }
+  const input = changes && typeof changes === 'object' ? changes : {}
+  const has = (key) => Object.hasOwn(input, key)
 
   const update = db.transaction(() => {
     const taskDetail = db.prepare(`
-      SELECT id, alarm_at AS currentAlarm
-      FROM task_details
-      WHERE nav_node_id = ?
+      SELECT
+        task_detail.id,
+        task_detail.description,
+        task_detail.due_date AS dueDate,
+        task_detail.alarm_at AS currentAlarm,
+        task_detail.completed,
+        task_detail.priority,
+        task_detail.workflow_status AS workflowStatus,
+        task_detail.tags_json AS tagsJson,
+        nav_node.title
+      FROM task_details AS task_detail
+      JOIN nav_nodes AS nav_node ON nav_node.id = task_detail.nav_node_id
+      WHERE task_detail.nav_node_id = ? AND nav_node.deleted_at IS NULL
     `).get(taskId)
 
     if (!taskDetail) {
       throw new Error(`Task detail not found: ${taskId}`)
     }
 
+    const title = has('title')
+      ? String(input.title ?? '').trim()
+      : taskDetail.title
+    const description = has('description')
+      ? String(input.description ?? '').trim()
+      : String(taskDetail.description ?? '')
+    const dueDate = has('dueDate')
+      ? String(input.dueDate ?? '').trim()
+      : String(taskDetail.dueDate ?? '')
+    const alarm = has('alarm')
+      ? String(input.alarm ?? '').trim().replace('T', ' ')
+      : String(taskDetail.currentAlarm ?? '')
+
+    if (!title) {
+      throw new Error('Task title is required')
+    }
+
+    if (has('tags') && (
+      !Array.isArray(input.tags)
+      || input.tags.some((tag) => typeof tag !== 'string')
+    )) {
+      throw new Error('INVALID_TASK_TAGS')
+    }
+    if (has('completed') && typeof input.completed !== 'boolean') {
+      throw new Error('INVALID_TASK_COMPLETED')
+    }
+
+    let priority = taskDetail.priority
+    if (has('priority')) {
+      priority = String(input.priority ?? '').trim()
+      if (!TASK_PRIORITIES.has(priority)) {
+        throw new Error('INVALID_TASK_PRIORITY')
+      }
+    }
+
+    let workflowStatus = taskDetail.workflowStatus
+    let completed = Boolean(taskDetail.completed)
+    if (has('completed')) {
+      completed = Boolean(input.completed)
+      if (!has('workflowStatus')) {
+        workflowStatus = completed
+          ? 'done'
+          : workflowStatus === 'done' ? 'todo' : workflowStatus
+      }
+    }
+    if (has('workflowStatus')) {
+      workflowStatus = String(input.workflowStatus ?? '').trim()
+      if (!WORKFLOW_STATUSES.has(workflowStatus)) {
+        throw new Error('INVALID_WORKFLOW_STATUS')
+      }
+      completed = workflowStatus === 'done'
+    }
+
+    const tags = has('tags')
+      ? normalizeTags(input.tags)
+      : parseTagsJson(taskDetail.tagsJson)
+
     const currentAssignees = getTaskAssigneesByDetailId(db, taskDetail.id)
     let nextAssignees = currentAssignees
     const hasAssigneeList =
-      Array.isArray(changes?.assigneeIds) ||
-      Array.isArray(changes?.manualAssigneeNames)
+      Array.isArray(input.assigneeIds) ||
+      Array.isArray(input.manualAssigneeNames)
 
     if (hasAssigneeList) {
       const requestedValues = [
-        ...(Array.isArray(changes.assigneeIds) ? changes.assigneeIds : []),
-        ...(Array.isArray(changes.manualAssigneeNames)
-          ? changes.manualAssigneeNames
+        ...(Array.isArray(input.assigneeIds) ? input.assigneeIds : []),
+        ...(Array.isArray(input.manualAssigneeNames)
+          ? input.manualAssigneeNames
           : []),
       ]
       nextAssignees = requestedValues
-        .map((value) => findOrCreateAssigneeUser(db, value))
+        .map((value) => findManagedAssigneeUser(db, value))
         .filter(Boolean)
-      nextAssignees = replaceTaskAssignees(
-        db,
-        taskDetail.id,
-        nextAssignees,
-      )
-    } else if (Object.hasOwn(changes ?? {}, 'assignee')) {
-      const legacyAssigneeName = String(changes.assignee ?? '').trim()
+      nextAssignees = replaceTaskAssignees(db, taskDetail.id, nextAssignees)
+    } else if (has('assignee')) {
+      const legacyAssigneeName = String(input.assignee ?? '').trim()
       const currentDisplay = getAssigneeDisplay(currentAssignees)
 
       if (legacyAssigneeName !== currentDisplay) {
-        const legacyAssignee = findOrCreateAssigneeUser(db, legacyAssigneeName)
+        const legacyAssignee = findManagedAssigneeUser(db, legacyAssigneeName)
         nextAssignees = replaceTaskAssignees(
           db,
           taskDetail.id,
@@ -1406,16 +1958,11 @@ export function updateTaskDetail(taskId, changes) {
     }
 
     const primaryAssigneeUserId = nextAssignees[0]?.id ?? null
-
-    const nodeResult = db.prepare(`
+    db.prepare(`
       UPDATE nav_nodes
       SET title = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND node_type = 'task' AND deleted_at IS NULL
     `).run(title, taskId)
-
-    if (nodeResult.changes === 0) {
-      throw new Error(`Active Task node not found: ${taskId}`)
-    }
 
     db.prepare(`
       UPDATE task_details
@@ -1424,6 +1971,10 @@ export function updateTaskDetail(taskId, changes) {
         due_date = ?,
         alarm_at = ?,
         assignee_user_id = ?,
+        completed = CASE WHEN ? THEN ? ELSE completed END,
+        priority = CASE WHEN ? THEN ? ELSE priority END,
+        workflow_status = CASE WHEN ? THEN ? ELSE workflow_status END,
+        tags_json = CASE WHEN ? THEN ? ELSE tags_json END,
         updated_at = CURRENT_TIMESTAMP
       WHERE nav_node_id = ?
     `).run(
@@ -1431,11 +1982,19 @@ export function updateTaskDetail(taskId, changes) {
       dueDate || null,
       alarm || null,
       primaryAssigneeUserId,
+      has('completed') || has('workflowStatus') ? 1 : 0,
+      completed ? 1 : 0,
+      has('priority') ? 1 : 0,
+      priority,
+      has('completed') || has('workflowStatus') ? 1 : 0,
+      workflowStatus,
+      has('tags') ? 1 : 0,
+      JSON.stringify(tags),
       taskId,
     )
 
     const nextAlarm = alarm || null
-    if ((taskDetail.currentAlarm ?? null) !== nextAlarm) {
+    if (has('alarm') && (taskDetail.currentAlarm ?? null) !== nextAlarm) {
       db.prepare(`DELETE FROM reminders WHERE task_detail_id = ?`).run(taskDetail.id)
 
       if (nextAlarm) {
@@ -1451,6 +2010,340 @@ export function updateTaskDetail(taskId, changes) {
     return getTaskDetail(taskId)
   })
 
+  return update()
+}
+
+function mapTaskSummary(db, row) {
+  return {
+    taskId: row.taskId,
+    title: row.title,
+    folderId: row.folderId || null,
+    folderTitle: row.folderTitle || '',
+    dueDate: row.dueDate || '',
+    completed: Boolean(row.completed),
+    assignees: getTaskAssigneesByDetailId(db, row.detailId),
+    priority: row.priority,
+    workflowStatus: row.workflowStatus,
+    tags: parseTagsJson(row.tagsJson),
+    isFavorite: Boolean(row.isFavorite),
+    lastOpenedAt: row.lastOpenedAt || null,
+  }
+}
+
+function getTaskSummariesByIds(db, userId, taskIds) {
+  if (!Array.isArray(taskIds) || taskIds.length === 0) return []
+  const placeholders = taskIds.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT
+      nav_node.id AS taskId,
+      task_detail.id AS detailId,
+      nav_node.title,
+      parent.id AS folderId,
+      COALESCE(parent.title, '') AS folderTitle,
+      COALESCE(task_detail.due_date, '') AS dueDate,
+      task_detail.completed,
+      task_detail.priority,
+      task_detail.workflow_status AS workflowStatus,
+      task_detail.tags_json AS tagsJson,
+      COALESCE(user_state.is_favorite, 0) AS isFavorite,
+      user_state.last_opened_at AS lastOpenedAt
+    FROM nav_nodes AS nav_node
+    JOIN task_details AS task_detail ON task_detail.nav_node_id = nav_node.id
+    LEFT JOIN nav_nodes AS parent ON parent.id = nav_node.parent_id
+    LEFT JOIN user_task_state AS user_state
+      ON user_state.nav_node_id = nav_node.id AND user_state.user_id = ?
+    WHERE nav_node.deleted_at IS NULL
+      AND nav_node.id IN (${placeholders})
+  `).all(userId, ...taskIds)
+  const byId = new Map(rows.map((row) => [row.taskId, mapTaskSummary(db, row)]))
+  return taskIds.map((taskId) => byId.get(taskId)).filter(Boolean)
+}
+
+export function getTaskFavorite(userId, taskId) {
+  const db = getDb()
+  const task = db.prepare(`
+    SELECT nav_node.id
+    FROM nav_nodes AS nav_node
+    JOIN task_details AS task_detail ON task_detail.nav_node_id = nav_node.id
+    WHERE nav_node.id = ? AND nav_node.deleted_at IS NULL
+  `).get(taskId)
+  if (!task) throw new Error(`Task detail not found: ${taskId}`)
+  const state = db.prepare(`
+    SELECT is_favorite AS isFavorite
+    FROM user_task_state
+    WHERE user_id = ? AND nav_node_id = ?
+  `).get(userId, taskId)
+  return { taskId, isFavorite: Boolean(state?.isFavorite) }
+}
+
+export function setTaskFavorite(userId, taskId, isFavorite) {
+  const db = getDb()
+  getTaskFavorite(userId, taskId)
+  db.prepare(`
+    INSERT INTO user_task_state (
+      user_id, nav_node_id, is_favorite, updated_at
+    ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, nav_node_id) DO UPDATE SET
+      is_favorite = excluded.is_favorite,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(userId, taskId, isFavorite ? 1 : 0)
+  return { taskId, isFavorite: Boolean(isFavorite) }
+}
+
+export function touchTaskRecent(userId, taskId) {
+  const db = getDb()
+  getTaskFavorite(userId, taskId)
+  db.prepare(`
+    INSERT INTO user_task_state (
+      user_id, nav_node_id, last_opened_at, updated_at
+    ) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, nav_node_id) DO UPDATE SET
+      last_opened_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(userId, taskId)
+  const row = db.prepare(`
+    SELECT last_opened_at AS lastOpenedAt
+    FROM user_task_state
+    WHERE user_id = ? AND nav_node_id = ?
+  `).get(userId, taskId)
+  return { taskId, lastOpenedAt: row.lastOpenedAt }
+}
+
+export function getWorkspaceTasks(userId, view, scope = 'all') {
+  const db = getDb()
+  const normalizedView = String(view || 'incomplete')
+  const allowedViews = new Set([
+    'today', 'overdue', 'week', 'incomplete', 'unassigned', 'favorites', 'recent',
+  ])
+  if (!allowedViews.has(normalizedView)) throw new Error('INVALID_WORKSPACE_VIEW')
+  if (!['all', 'mine'].includes(scope)) throw new Error('INVALID_WORKSPACE_SCOPE')
+
+  const filters = ['nav_node.deleted_at IS NULL']
+  if (scope === 'mine') {
+    filters.push(`EXISTS (
+      SELECT 1 FROM task_assignees AS mine
+      WHERE mine.task_detail_id = task_detail.id AND mine.user_id = @userId
+    )`)
+  }
+  if (normalizedView === 'today') {
+    filters.push(`date(task_detail.due_date) = date('now', 'localtime')`)
+  } else if (normalizedView === 'overdue') {
+    filters.push(`task_detail.completed = 0`)
+    filters.push(`date(task_detail.due_date) < date('now', 'localtime')`)
+  } else if (normalizedView === 'week') {
+    filters.push(`date(task_detail.due_date) BETWEEN date('now', 'localtime') AND date('now', 'localtime', '+6 days')`)
+  } else if (normalizedView === 'incomplete') {
+    filters.push(`task_detail.completed = 0`)
+  } else if (normalizedView === 'unassigned') {
+    filters.push(`NOT EXISTS (
+      SELECT 1 FROM task_assignees AS assigned
+      WHERE assigned.task_detail_id = task_detail.id
+    )`)
+  } else if (normalizedView === 'favorites') {
+    filters.push(`COALESCE(user_state.is_favorite, 0) = 1`)
+  } else if (normalizedView === 'recent') {
+    filters.push(`user_state.last_opened_at IS NOT NULL`)
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      nav_node.id AS taskId,
+      task_detail.id AS detailId,
+      nav_node.title,
+      parent.id AS folderId,
+      COALESCE(parent.title, '') AS folderTitle,
+      COALESCE(task_detail.due_date, '') AS dueDate,
+      task_detail.completed,
+      task_detail.priority,
+      task_detail.workflow_status AS workflowStatus,
+      task_detail.tags_json AS tagsJson,
+      COALESCE(user_state.is_favorite, 0) AS isFavorite,
+      user_state.last_opened_at AS lastOpenedAt
+    FROM nav_nodes AS nav_node
+    JOIN task_details AS task_detail ON task_detail.nav_node_id = nav_node.id
+    LEFT JOIN nav_nodes AS parent ON parent.id = nav_node.parent_id
+    LEFT JOIN user_task_state AS user_state
+      ON user_state.nav_node_id = nav_node.id AND user_state.user_id = @userId
+    WHERE ${filters.join('\n      AND ')}
+    ORDER BY ${normalizedView === 'recent'
+      ? 'user_state.last_opened_at DESC, nav_node.id'
+      : `CASE WHEN task_detail.due_date IS NULL THEN 1 ELSE 0 END,
+        task_detail.due_date, nav_node.title COLLATE NOCASE, nav_node.id`}
+    ${normalizedView === 'recent' ? 'LIMIT 20' : ''}
+  `).all({ userId })
+  return rows.map((row) => mapTaskSummary(db, row))
+}
+
+export function getRecentTasks(userId, scope = 'all') {
+  return getWorkspaceTasks(userId, 'recent', scope)
+}
+
+export function bulkUpdateTasks(userId, taskIds, changes) {
+  const db = getDb()
+  if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.length > 100) {
+    throw new Error('TASK_BULK_SIZE_INVALID')
+  }
+  if (taskIds.some((taskId) => typeof taskId !== 'string' || !taskId.trim())) {
+    throw new Error('TASK_BULK_TARGET_INVALID')
+  }
+  const ids = Array.from(new Set(taskIds.map((taskId) => taskId.trim())))
+  const input = changes && typeof changes === 'object' && !Array.isArray(changes)
+    ? changes
+    : null
+  if (!input) throw new Error('TASK_BULK_CHANGES_REQUIRED')
+  const has = (key) => Object.hasOwn(input, key)
+  const allowedKeys = new Set([
+    'priority', 'workflowStatus', 'tags', 'dueDate', 'completed',
+    'assigneeIds', 'parentId',
+  ])
+  const inputKeys = Object.keys(input)
+  if (
+    inputKeys.length === 0
+    || inputKeys.some((key) => !allowedKeys.has(key))
+  ) {
+    throw new Error('TASK_BULK_CHANGES_REQUIRED')
+  }
+  if (has('priority') && typeof input.priority !== 'string') {
+    throw new Error('INVALID_TASK_PRIORITY')
+  }
+  if (has('workflowStatus') && typeof input.workflowStatus !== 'string') {
+    throw new Error('INVALID_WORKFLOW_STATUS')
+  }
+  if (has('tags') && (
+    !Array.isArray(input.tags)
+    || input.tags.some((tag) => typeof tag !== 'string')
+  )) {
+    throw new Error('INVALID_TASK_TAGS')
+  }
+  if (has('dueDate') && input.dueDate !== null && typeof input.dueDate !== 'string') {
+    throw new Error('INVALID_TASK_DUE_DATE')
+  }
+  if (has('completed') && typeof input.completed !== 'boolean') {
+    throw new Error('INVALID_TASK_COMPLETED')
+  }
+  if (has('assigneeIds') && !Array.isArray(input.assigneeIds)) {
+    throw new Error('INVALID_TASK_ASSIGNEES')
+  }
+  if (has('parentId') && input.parentId !== null && typeof input.parentId !== 'string') {
+    throw new Error('INVALID_TASK_PARENT')
+  }
+
+  const update = db.transaction(() => {
+    const placeholders = ids.map(() => '?').join(', ')
+    const targets = db.prepare(`
+      SELECT task_detail.id AS detailId, nav_node.id AS taskId,
+        task_detail.completed, task_detail.workflow_status AS workflowStatus
+      FROM nav_nodes AS nav_node
+      JOIN task_details AS task_detail ON task_detail.nav_node_id = nav_node.id
+      WHERE nav_node.deleted_at IS NULL AND nav_node.id IN (${placeholders})
+    `).all(...ids)
+    if (targets.length !== ids.length) throw new Error('TASK_BULK_TARGET_NOT_FOUND')
+
+    let priority
+    if (has('priority')) {
+      priority = String(input.priority ?? '').trim()
+      if (!TASK_PRIORITIES.has(priority)) throw new Error('INVALID_TASK_PRIORITY')
+    }
+    let workflowStatus
+    if (has('workflowStatus')) {
+      workflowStatus = String(input.workflowStatus ?? '').trim()
+      if (!WORKFLOW_STATUSES.has(workflowStatus)) {
+        throw new Error('INVALID_WORKFLOW_STATUS')
+      }
+    }
+    const tags = has('tags') ? normalizeTags(input.tags) : null
+    const dueDate = has('dueDate') ? String(input.dueDate ?? '').trim() : null
+
+    let assignees = null
+    if (has('assigneeIds')) {
+      if (input.assigneeIds.some((id) => typeof id !== 'string' || !id.trim())) {
+        throw new Error('INVALID_TASK_ASSIGNEES')
+      }
+      const requested = Array.from(new Set(
+        input.assigneeIds.map((id) => id.trim()),
+      ))
+      const findAssigneeById = db.prepare(`
+        SELECT id, name, email
+        FROM users
+        WHERE id = ? AND login_id IS NOT NULL AND is_active = 1
+      `)
+      assignees = requested.map((id) => findAssigneeById.get(id) ?? null)
+      if (assignees.some((user) => !user)) {
+        throw new Error('ASSIGNEE_USER_NOT_FOUND')
+      }
+    }
+
+    let parentId
+    if (has('parentId')) {
+      parentId = String(input.parentId ?? '').trim() || null
+      if (parentId) {
+        const folder = db.prepare(`
+          SELECT id FROM nav_nodes
+          WHERE id = ? AND node_type = 'folder' AND deleted_at IS NULL
+        `).get(parentId)
+        if (!folder) throw new Error('TARGET_FOLDER_NOT_FOUND')
+      }
+    }
+
+    targets.forEach((target) => {
+      let nextWorkflowStatus = workflowStatus ?? target.workflowStatus
+      let nextCompleted = has('completed')
+        ? Boolean(input.completed)
+        : Boolean(target.completed)
+      if (workflowStatus !== undefined) {
+        nextCompleted = workflowStatus === 'done'
+      } else if (has('completed')) {
+        nextWorkflowStatus = nextCompleted
+          ? 'done'
+          : target.workflowStatus === 'done' ? 'todo' : target.workflowStatus
+      }
+
+      db.prepare(`
+        UPDATE task_details SET
+          priority = CASE WHEN @hasPriority THEN @priority ELSE priority END,
+          workflow_status = @workflowStatus,
+          completed = @completed,
+          tags_json = CASE WHEN @hasTags THEN @tagsJson ELSE tags_json END,
+          due_date = CASE WHEN @hasDueDate THEN @dueDate ELSE due_date END,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = @detailId
+      `).run({
+        hasPriority: has('priority') ? 1 : 0,
+        priority: priority ?? 'normal',
+        workflowStatus: nextWorkflowStatus,
+        completed: nextCompleted ? 1 : 0,
+        hasTags: has('tags') ? 1 : 0,
+        tagsJson: JSON.stringify(tags ?? []),
+        hasDueDate: has('dueDate') ? 1 : 0,
+        dueDate: dueDate || null,
+        detailId: target.detailId,
+      })
+      if (assignees) {
+        replaceTaskAssignees(db, target.detailId, assignees)
+        db.prepare(`
+          UPDATE task_details SET assignee_user_id = ? WHERE id = ?
+        `).run(assignees[0]?.id ?? null, target.detailId)
+      }
+    })
+
+    if (has('parentId')) {
+      const maxOrder = db.prepare(`
+        SELECT COALESCE(MAX(order_index), 0) AS value
+        FROM nav_nodes
+        WHERE ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)
+          AND deleted_at IS NULL
+          AND id NOT IN (${placeholders})
+      `).get(parentId, parentId, ...ids).value
+      const move = db.prepare(`
+        UPDATE nav_nodes
+        SET parent_id = ?, order_index = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND deleted_at IS NULL
+      `)
+      ids.forEach((taskId, index) => move.run(parentId, maxOrder + index + 1, taskId))
+    }
+
+    return getTaskSummariesByIds(db, userId, ids)
+  })
   return update()
 }
 
@@ -2281,6 +3174,7 @@ export function renameNavigationNode(nodeId, title) {
 
 export function deleteNavigationNode(nodeId) {
   const db = getDb()
+  const batchId = randomUUID()
   const target = db.prepare(`
     SELECT id
     FROM nav_nodes
@@ -2307,11 +3201,156 @@ export function deleteNavigationNode(nodeId) {
     UPDATE nav_nodes
     SET
       deleted_at = CURRENT_TIMESTAMP,
+      deleted_batch_id = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id IN (SELECT id FROM descendants)
-  `).run(nodeId)
+  `).run(nodeId, batchId)
 
-  return { id: nodeId, deletedCount: result.changes }
+  return { id: nodeId, batchId, deletedCount: result.changes }
+}
+
+export function getTrashNodes(userId) {
+  const db = getDb()
+  return db.prepare(`
+    SELECT
+      root.id,
+      root.node_type AS type,
+      root.title,
+      root.parent_id AS parentId,
+      root.deleted_at AS deletedAt,
+      root.deleted_batch_id AS deletedBatchId,
+      (
+        SELECT COUNT(*)
+        FROM nav_nodes AS item
+        WHERE item.deleted_batch_id = root.deleted_batch_id
+          AND item.deleted_at IS NOT NULL
+      ) AS count
+    FROM nav_nodes AS root
+    WHERE root.deleted_at IS NOT NULL
+      AND root.deleted_batch_id IS NOT NULL
+      AND root.owner_user_id = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM nav_nodes AS parent
+        WHERE parent.id = root.parent_id
+          AND parent.deleted_at IS NOT NULL
+          AND parent.deleted_batch_id = root.deleted_batch_id
+      )
+    ORDER BY root.deleted_at DESC, root.id
+  `).all(userId)
+}
+
+export function restoreNavigationNode(nodeId, userId) {
+  const db = getDb()
+  const restore = db.transaction(() => {
+    const root = db.prepare(`
+      SELECT node.id, node.parent_id AS parentId, node.deleted_batch_id AS batchId
+      FROM nav_nodes AS node
+      WHERE node.id = ?
+        AND node.owner_user_id = ?
+        AND node.deleted_at IS NOT NULL
+        AND node.deleted_batch_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM nav_nodes AS parent
+          WHERE parent.id = node.parent_id
+            AND parent.deleted_at IS NOT NULL
+            AND parent.deleted_batch_id = node.deleted_batch_id
+        )
+    `).get(nodeId, userId)
+    if (!root) throw new Error(`Trash node not found: ${nodeId}`)
+
+    const parent = root.parentId
+      ? db.prepare(`SELECT id FROM nav_nodes WHERE id = ? AND deleted_at IS NULL`).get(root.parentId)
+      : null
+    const nextParentId = parent?.id ?? null
+    const maxOrder = db.prepare(`
+      SELECT COALESCE(MAX(order_index), 0) AS value
+      FROM nav_nodes
+      WHERE ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)
+        AND deleted_at IS NULL
+    `).get(nextParentId, nextParentId).value
+
+    db.prepare(`
+      UPDATE nav_nodes
+      SET parent_id = ?, order_index = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(nextParentId, maxOrder + 1, root.id)
+
+    const result = db.prepare(`
+      UPDATE nav_nodes
+      SET
+        deleted_at = NULL,
+        deleted_batch_id = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE deleted_batch_id = ? AND deleted_at IS NOT NULL
+    `).run(root.batchId)
+
+    return {
+      id: root.id,
+      parentId: nextParentId,
+      restoredCount: result.changes,
+    }
+  })
+  return restore()
+}
+
+export function permanentlyDeleteNavigationNode(nodeId, userId) {
+  const db = getDb()
+  const remove = db.transaction(() => {
+    const root = db.prepare(`
+      SELECT node.id, node.deleted_batch_id AS batchId
+      FROM nav_nodes AS node
+      WHERE node.id = ?
+        AND node.owner_user_id = ?
+        AND node.deleted_at IS NOT NULL
+        AND node.deleted_batch_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM nav_nodes AS parent
+          WHERE parent.id = node.parent_id
+            AND parent.deleted_at IS NOT NULL
+            AND parent.deleted_batch_id = node.deleted_batch_id
+        )
+    `).get(nodeId, userId)
+    if (!root) throw new Error(`Trash node not found: ${nodeId}`)
+
+    const batchNodes = db.prepare(`
+      SELECT id FROM nav_nodes
+      WHERE deleted_batch_id = ? AND deleted_at IS NOT NULL
+    `).all(root.batchId)
+    const batchIds = batchNodes.map((node) => node.id)
+    if (batchIds.length === 0) throw new Error(`Trash node not found: ${nodeId}`)
+
+    const placeholders = batchIds.map(() => '?').join(', ')
+    const boundaryNodes = db.prepare(`
+      SELECT child.id
+      FROM nav_nodes AS child
+      WHERE child.parent_id IN (${placeholders})
+        AND (
+          child.deleted_at IS NULL
+          OR child.deleted_batch_id IS NULL
+          OR child.deleted_batch_id <> ?
+        )
+    `).all(...batchIds, root.batchId)
+    const rootOrder = db.prepare(`
+      SELECT COALESCE(MAX(order_index), 0) AS value
+      FROM nav_nodes
+      WHERE parent_id IS NULL AND deleted_at IS NULL
+    `).get().value
+    const detach = db.prepare(`
+      UPDATE nav_nodes
+      SET parent_id = NULL, order_index = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `)
+    boundaryNodes.forEach((node, index) => {
+      detach.run(rootOrder + index + 1, node.id)
+    })
+
+    // Delete only this batch. Attachment rows are removed by SQLite cascades;
+    // shared stored_path files are intentionally never unlinked here.
+    db.prepare(`DELETE FROM nav_nodes WHERE id = ?`).run(root.id)
+    return { id: nodeId, deletedCount: batchIds.length }
+  })
+  return remove()
 }
 
 export function moveNavigationNode(nodeId, targetFolderId = null) {
@@ -2495,7 +3534,10 @@ export function copyNavigationNode(nodeId, targetFolderId = null) {
         alarm_at AS alarmAt,
         assignee_user_id AS assigneeUserId,
         memo_content AS memoContent,
-        completed
+        completed,
+        priority,
+        workflow_status AS workflowStatus,
+        tags_json AS tagsJson
       FROM task_details
       WHERE nav_node_id = ?
     `)
@@ -2508,8 +3550,11 @@ export function copyNavigationNode(nodeId, targetFolderId = null) {
         alarm_at,
         assignee_user_id,
         memo_content,
-        completed
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        completed,
+        priority,
+        workflow_status,
+        tags_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const getSourceTaskAssignees = db.prepare(`
       SELECT user_id AS userId, order_index AS "order"
@@ -2716,6 +3761,9 @@ export function copyNavigationNode(nodeId, targetFolderId = null) {
           sourceDetail?.assigneeUserId ?? null,
           sourceDetail?.memoContent ?? '',
           sourceDetail?.completed ?? 0,
+          sourceDetail?.priority ?? 'normal',
+          sourceDetail?.workflowStatus ?? (sourceDetail?.completed ? 'done' : 'todo'),
+          sourceDetail?.tagsJson ?? '[]',
         )
 
         if (sourceDetail) {

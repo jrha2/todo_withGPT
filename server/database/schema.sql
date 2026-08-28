@@ -24,6 +24,7 @@ CREATE TABLE nav_nodes (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME NULL,
+  deleted_batch_id TEXT NULL,
   FOREIGN KEY (parent_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
   FOREIGN KEY (owner_user_id) REFERENCES users(id)
 );
@@ -39,6 +40,9 @@ CREATE TABLE task_details (
   memo_author_user_id TEXT NULL,
   memo_updated_at DATETIME NULL,
   completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  workflow_status TEXT NOT NULL DEFAULT 'todo' CHECK (workflow_status IN ('todo', 'in_progress', 'blocked', 'done')),
+  tags_json TEXT NOT NULL DEFAULT '[]',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (nav_node_id) REFERENCES nav_nodes(id) ON DELETE CASCADE,
@@ -143,6 +147,17 @@ CREATE TABLE task_assignees (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE user_task_state (
+  user_id TEXT NOT NULL,
+  nav_node_id TEXT NOT NULL,
+  is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1)),
+  last_opened_at DATETIME NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, nav_node_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (nav_node_id) REFERENCES nav_nodes(id) ON DELETE CASCADE
+);
+
 CREATE TABLE auth_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -183,6 +198,15 @@ CREATE UNIQUE INDEX idx_users_login_id
 
 CREATE INDEX idx_nav_nodes_owner_user
   ON nav_nodes(owner_user_id);
+
+CREATE INDEX idx_nav_nodes_deleted_batch
+  ON nav_nodes(deleted_batch_id, deleted_at);
+
+CREATE INDEX idx_user_task_state_recent
+  ON user_task_state(user_id, last_opened_at DESC);
+
+CREATE INDEX idx_user_task_state_favorite
+  ON user_task_state(user_id, is_favorite, updated_at DESC);
 
 CREATE UNIQUE INDEX idx_task_details_nav_node
   ON task_details(nav_node_id);
