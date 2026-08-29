@@ -44,6 +44,7 @@ import {
   moveNavigationNode,
   renameNavigationNode,
   reorderNavigationNode,
+  setAllNavigationExpanded,
   setNavigationNodeExpanded,
   type NavigationScope,
   type NavigationSearchHit,
@@ -118,7 +119,7 @@ type TaskDetail = {
   }>
 }
 
-const MIN_NAVIGATION_WIDTH = 300
+const MIN_NAVIGATION_WIDTH = 372
 const MAX_NAVIGATION_WIDTH = 520
 
 function sortSubTasks(items: SubTaskRecord[]) {
@@ -486,6 +487,32 @@ function MainLayout({
           : node,
       ),
     )
+  }
+
+  const handleSetAllFoldersExpanded = async (expanded: boolean) => {
+    const hasChange = navigationTree.some(
+      (node) => node.type === 'folder' && Boolean(node.expanded) !== expanded,
+    )
+
+    if (!hasChange) {
+      return
+    }
+
+    // Optimistically flip every folder, then persist the whole change with a
+    // single server call so no partially-applied sync reload can leave the tree
+    // expanding one level at a time.
+    setNavigationTree((prev) =>
+      prev.map((node) =>
+        node.type === 'folder' ? { ...node, expanded } : node,
+      ),
+    )
+
+    try {
+      await setAllNavigationExpanded(expanded)
+    } catch (error) {
+      console.error('Failed to update all folder expansion:', error)
+      await loadTree()
+    }
   }
 
   const handleRenameNode = async (nodeId: string, nextTitle: string) => {
@@ -1183,6 +1210,7 @@ function MainLayout({
         selectedTaskId={selectedTaskId}
         onSelectTask={handleSelectTask}
         onToggleFolder={handleToggleFolder}
+        onSetAllFoldersExpanded={handleSetAllFoldersExpanded}
         onRenameNode={handleRenameNode}
         onCreateFolder={handleCreateFolder}
         onCreateTask={handleCreateTask}

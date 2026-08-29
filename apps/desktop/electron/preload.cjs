@@ -86,6 +86,8 @@ contextBridge.exposeInMainWorld('api', {
       }),
     setExpanded: (nodeId, expanded) =>
       ipcRenderer.invoke('navigation:setExpanded', { nodeId, expanded }),
+    setAllExpanded: (expanded) =>
+      ipcRenderer.invoke('navigation:setAllExpanded', { expanded }),
   },
   workspace: {
     getTasks: (view, scope = 'all') =>

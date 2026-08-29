@@ -23,6 +23,10 @@ type NavigationNode = {
 type RenderNode = NavigationNode & {
   depth: number
   isLastSibling?: boolean
+  isLeafFolder?: boolean
+  hasChildNodes?: boolean
+  inCard?: boolean
+  isCardEnd?: boolean
 }
 
 type NavigationBarProps = {
@@ -49,6 +53,7 @@ type NavigationBarProps = {
   selectedTaskId: string
   onSelectTask: (taskId: string) => void
   onToggleFolder: (folderId: string) => Promise<void>
+  onSetAllFoldersExpanded: (expanded: boolean) => Promise<void>
   onRenameNode: (nodeId: string, nextTitle: string) => Promise<void>
   onCreateFolder: (title: string, parentId: string | null) => Promise<void>
   onCreateTask: (title: string, parentId: string | null) => Promise<void>
@@ -147,6 +152,7 @@ function NavigationBar({
   selectedTaskId,
   onSelectTask,
   onToggleFolder,
+  onSetAllFoldersExpanded,
   onRenameNode,
   onCreateFolder,
   onCreateTask,
@@ -236,14 +242,25 @@ function NavigationBar({
 
     const result: RenderNode[] = []
 
-    const walk = (parentId: string | null, depth: number) => {
+    const walk = (parentId: string | null, depth: number, parentIsLeaf = false) => {
       const children = childrenMap.get(parentId) ?? []
 
       children.forEach((node, index) => {
+        const kids = childrenMap.get(node.id) ?? []
+        const hasChildNodes = kids.length > 0
+        const isLeafFolder =
+          node.type === 'folder' && hasChildNodes
+          && kids.every((child) => child.type === 'task')
+        const inCard = parentIsLeaf && node.type === 'task'
+        const isCardEnd = inCard && index === children.length - 1
         result.push({
           ...node,
           depth,
           isLastSibling: index === children.length - 1,
+          isLeafFolder,
+          hasChildNodes,
+          inCard,
+          isCardEnd,
         })
 
         if (!isSearching && childCreateState?.parentId === node.id) {
@@ -289,7 +306,7 @@ function NavigationBar({
         }
 
         if (node.type === 'folder' && (node.expanded || isSearching)) {
-          walk(node.id, depth + 1)
+          walk(node.id, depth + 1, isLeafFolder)
         }
       })
     }
@@ -679,7 +696,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.0.2</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.2.0</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -865,6 +882,25 @@ function NavigationBar({
         <span>{displayTree.filter((node) => node.type === 'task').length}</span>
       </div>
 
+      {!isSearching && (
+        <div className="navigation-tree-toolbar">
+          <button
+            type="button"
+            className="navigation-tree-toggle-text"
+            onClick={() => void onSetAllFoldersExpanded(true)}
+          >
+            전체 펼치기
+          </button>
+          <button
+            type="button"
+            className="navigation-tree-toggle-text"
+            onClick={() => void onSetAllFoldersExpanded(false)}
+          >
+            전체 접기
+          </button>
+        </div>
+      )}
+
       <div
         className={`navigation-tree ${dropTargetState?.position === 'root' ? 'is-root-drop-target' : ''}`}
         onDragOver={handleRootDragOver}
@@ -1003,6 +1039,10 @@ function NavigationBar({
               className={[
                 'navigation-node-row',
                 `navigation-depth-${Math.min(node.depth, 4)}`,
+                node.type === 'folder' && node.isLeafFolder ? 'is-leaf-folder' : '',
+                node.type === 'folder' && !node.isLeafFolder ? 'is-branch-folder' : '',
+                node.inCard ? 'task-in-card' : '',
+                node.isCardEnd ? 'is-card-end' : '',
                 draggedNodeId === node.id ? 'is-dragging' : '',
                 dropTargetState?.nodeId === node.id
                   ? `drop-${dropTargetState.position}`
@@ -1049,7 +1089,12 @@ function NavigationBar({
                             <path d="M6 3.5 10.5 8 6 12.5" />
                           </svg>
                         </span>
-                        <span className="tree-node-icon folder-icon" />
+                        <span className="tree-node-icon folder-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24" fill="none">
+                            <rect x="3.5" y="4.5" width="7" height="15" rx="2" className="board-bar board-bar-tall" />
+                            <rect x="13.5" y="4.5" width="7" height="9.5" rx="2" className="board-bar board-bar-short" />
+                          </svg>
+                        </span>
                         <span className="tree-node-label">{node.title}</span>
                         {isSearching && Boolean(node.matchKinds?.length) && (
                           <span className="tree-node-match-kind">
@@ -1075,7 +1120,12 @@ function NavigationBar({
                             ◎
                           </span>
                         )}
-                        <span className="tree-node-icon task-icon" />
+                        <span className="tree-node-icon task-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24" fill="none">
+                            <circle cx="12" cy="12" r="7.5" className="task-ring" />
+                            <path className="task-ring-check" d="M8.5 12.2l2.3 2.3 4.7-5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </span>
                         <span className="tree-node-label">{node.title}</span>
                         {isSearching && Boolean(node.matchKinds?.length) && (
                           <span className="tree-node-match-kind">

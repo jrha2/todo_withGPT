@@ -1588,6 +1588,17 @@ export function setNavigationNodeExpanded(nodeId, expanded) {
   return { id: nodeId, expanded: Boolean(expanded) }
 }
 
+export function setAllNavigationExpanded(expanded) {
+  const db = getDb()
+  const result = db.prepare(`
+    UPDATE nav_nodes
+    SET is_expanded = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE node_type = 'folder' AND deleted_at IS NULL
+  `).run(expanded ? 1 : 0)
+
+  return { expanded: Boolean(expanded), updated: result.changes }
+}
+
 function getTaskAssigneesByDetailId(db, taskDetailId) {
   return db.prepare(`
     SELECT

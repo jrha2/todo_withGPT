@@ -6001,3 +6001,470 @@
     justify-content: flex-start;
   }
 }
+
+/* =====================================================================
+   Navigation Bar redesign (2026) — visual-only overrides.
+   Markup/classes unchanged; appended last so it wins the cascade.
+   Goal: clearer hierarchy and readability on the existing teal theme.
+   ===================================================================== */
+.navigation-bar {
+  --nav-bg: #10242a;
+  --nav-surface: #163038;
+  --nav-line: #274851;
+  --nav-ink: #eaf4f6;
+  --nav-ink-soft: #9fb8bd;
+  --nav-ink-muted: #79969c;
+  --nav-accent: #4fc0cd;
+  --nav-accent-soft: rgba(79, 192, 205, 0.16);
+  padding: 16px 12px 12px;
+  background:
+    radial-gradient(circle at 0 0, rgba(79, 192, 205, 0.08), transparent 240px),
+    #0f2228;
+  border-right: 1px solid #24454e;
+  gap: 10px;
+}
+
+.navigation-bar .navigation-header {
+  min-height: 40px;
+  margin-bottom: 8px;
+}
+.navigation-bar .navigation-brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #4fc0cd, #2c8a97);
+  color: #04222a;
+  box-shadow: 0 4px 12px rgba(20, 120, 132, 0.35);
+}
+.navigation-bar .navigation-title {
+  color: #f2fbfc !important;
+  font-size: 16px !important;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+.navigation-bar .navigation-subtitle {
+  color: #7fa2a8 !important;
+  font-size: 11px !important;
+}
+
+.navigation-bar .navigation-smart-views {
+  gap: 5px;
+  margin-bottom: 4px;
+}
+.navigation-bar .navigation-smart-views button {
+  height: 30px;
+  border: 1px solid #2b4f58;
+  border-radius: 8px;
+  color: #cfe6ea;
+  background: rgba(22, 48, 56, 0.8);
+  font-weight: 600;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.navigation-bar .navigation-smart-views button:hover {
+  color: #ffffff;
+  border-color: #3f7580;
+  background: rgba(45, 105, 116, 0.4);
+}
+.navigation-bar .navigation-smart-views button.is-active {
+  color: #062a30;
+  border-color: transparent;
+  background: linear-gradient(135deg, #4fc0cd, #34a0ae);
+  font-weight: 700;
+}
+.navigation-bar .navigation-smart-views button.is-trash {
+  color: #e79aa0;
+}
+.navigation-bar .navigation-smart-views button.is-trash.is-active {
+  color: #3a0e12;
+  background: linear-gradient(135deg, #e58b92, #c65b63);
+}
+
+.navigation-bar .navigation-briefing-button {
+  min-height: 50px;
+  border: 1px solid #2b4f58;
+  border-radius: 11px;
+  background: rgba(22, 48, 56, 0.85);
+}
+.navigation-bar .navigation-briefing-button:hover,
+.navigation-bar .navigation-briefing-button.is-active {
+  border-color: #4fc0cd;
+  background: rgba(45, 105, 116, 0.35);
+}
+.navigation-bar .navigation-briefing-icon {
+  background: var(--nav-accent-soft);
+  color: #6fe0ec;
+}
+.navigation-bar .navigation-briefing-button strong { color: #f2fbfc; }
+.navigation-bar .navigation-search input {
+  height: 38px;
+  border: 1px solid #2b4f58;
+  border-radius: 10px;
+  color: #eaf4f6;
+  background: rgba(15, 34, 40, 0.9);
+}
+.navigation-bar .navigation-search input::placeholder { color: #6f9199; }
+.navigation-bar .navigation-search input:focus {
+  border-color: #4fc0cd;
+  box-shadow: 0 0 0 3px rgba(79, 192, 205, 0.18);
+}
+.navigation-bar .navigation-search-icon { color: #6f9199; }
+.navigation-bar .navigation-search kbd {
+  color: #9fb8bd;
+  background: rgba(43, 79, 88, 0.6);
+  border-color: #2b4f58;
+}
+
+.navigation-bar .navigation-scope-filter button {
+  height: 30px;
+  border-radius: 8px;
+  color: #b7d2d7;
+}
+.navigation-bar .navigation-scope-filter button.is-active {
+  color: #062a30;
+  background: linear-gradient(135deg, #4fc0cd, #34a0ae);
+  font-weight: 700;
+}
+.navigation-bar .completed-visibility-toggle.is-navigation {
+  min-height: 32px;
+  border: 1px solid #2b4f58;
+  border-radius: 8px;
+  color: #b7d2d7;
+  background: rgba(22, 48, 56, 0.7);
+}
+.navigation-bar .completed-visibility-toggle.is-navigation:hover,
+.navigation-bar .completed-visibility-toggle.is-navigation.is-active {
+  border-color: #4fc0cd;
+  color: #ffffff;
+  background: rgba(45, 105, 116, 0.35);
+}
+
+.navigation-bar .navigation-section-header {
+  color: #7fa2a8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.navigation-bar .navigation-section-header span:last-child {
+  color: #cfe6ea;
+  background: rgba(43, 79, 88, 0.7);
+}
+.navigation-bar .tree-node {
+  min-height: 34px;
+  border-radius: 8px;
+  color: #c3d8dc;
+  font-size: 13px;
+}
+.navigation-bar .tree-node:hover {
+  color: #ffffff;
+  background: rgba(45, 105, 116, 0.32);
+}
+.navigation-bar .tree-node.is-selected {
+  color: #062a30;
+  background: linear-gradient(135deg, rgba(79,192,205,0.95), rgba(52,160,174,0.95));
+  box-shadow: inset 3px 0 0 #8fe6f0;
+  font-weight: 700;
+}
+.navigation-bar .tree-node-label { color: inherit; }
+
+.navigation-bar .tree-node-chevron { color: #8fb0b6; }
+.navigation-bar .tree-node.folder:hover .tree-node-chevron {
+  color: #6fe0ec;
+  background: rgba(79, 192, 205, 0.18);
+}
+.navigation-bar .tree-node.is-selected .tree-node-chevron { color: #062a30; }
+.navigation-bar .tree-node-branch { color: #567077; }
+.navigation-bar .tree-node.is-selected .tree-node-branch { color: #063038; }
+.navigation-bar .tree-node-root-marker {
+  color: #6fe0ec;
+  background: rgba(79, 192, 205, 0.16);
+}
+.navigation-bar .tree-node.is-selected .tree-node-root-marker {
+  color: #062a30;
+  background: rgba(4, 34, 42, 0.28);
+}
+.navigation-bar .folder-icon,
+.navigation-bar .folder-icon::before { background: #7fb6bf; }
+.navigation-bar .tree-node.is-selected .folder-icon,
+.navigation-bar .tree-node.is-selected .folder-icon::before { background: #063038; }
+.navigation-bar .task-icon { border-color: #6a8991; }
+.navigation-bar .tree-node.is-selected .task-icon {
+  border-color: #063038;
+  background: #063038;
+  box-shadow: inset 0 0 0 3px rgba(255,255,255,0.35);
+}
+
+.navigation-bar .navigation-account-card {
+  border: 1px solid #2b4f58;
+  border-radius: 10px;
+  background: rgba(22, 48, 56, 0.85);
+}
+.navigation-bar .navigation-account-avatar {
+  background: linear-gradient(135deg, #4fc0cd, #2c8a97);
+  color: #04222a;
+  font-weight: 700;
+}
+.navigation-bar .navigation-account-copy strong { color: #f2fbfc; }
+.navigation-bar .navigation-account-copy span { color: #7fa2a8; }
+.navigation-bar .navigation-account-actions button {
+  border: 1px solid #2b4f58;
+  border-radius: 7px;
+  color: #cfe6ea;
+  background: rgba(15, 34, 40, 0.6);
+}
+.navigation-bar .navigation-account-actions button:hover {
+  border-color: #4fc0cd;
+  color: #ffffff;
+}
+.navigation-bar .navigation-more-button { color: #9fb8bd; }
+.navigation-bar .navigation-more-button:hover {
+  color: #ffffff;
+  background: rgba(45, 105, 116, 0.4);
+}
+.navigation-bar .navigation-add-button {
+  background: linear-gradient(135deg, #4fc0cd, #2c8a97);
+  color: #04222a;
+  box-shadow: 0 4px 12px rgba(20, 120, 132, 0.35);
+}
+.navigation-bar .navigation-collapse-button {
+  color: #9fb8bd;
+  border-color: #2b4f58;
+}
+
+/* =====================================================================
+   Navigation redesign v1.1 — board folder icon, ring task icon,
+   depth-tiered left color bars, leaf-folder card. Visual only.
+   ===================================================================== */
+.navigation-bar {
+  --nav-accent: #4c6ef5;
+  --nav-accent-strong: #3b5bdb;
+  --nav-area-1: #6366f1;
+  --nav-area-2: #0ea5a5;
+  --nav-area-3: #f59e0b;
+}
+
+/* 폴더 = 보드(칸반) 아이콘. 기존 folder-icon 사각형 숨기고 SVG 사용 */
+.navigation-bar .tree-node-icon.folder-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 0;
+  background: none;
+}
+.navigation-bar .tree-node-icon.folder-icon::before { content: none; }
+.navigation-bar .tree-node-icon.folder-icon svg { width: 18px; height: 18px; display: block; }
+.navigation-bar .tree-node-icon.folder-icon .board-bar { fill: #5b6bd6; }
+.navigation-bar .tree-node-icon.folder-icon .board-bar-tall { opacity: 0.92; }
+.navigation-bar .tree-node-icon.folder-icon .board-bar-short { opacity: 0.6; }
+.navigation-bar .tree-node.is-selected .tree-node-icon.folder-icon .board-bar { fill: #ffffff; }
+
+/* Task = 라운드 미니멀 링 */
+.navigation-bar .tree-node-icon.task-icon {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.navigation-bar .tree-node-icon.task-icon svg { width: 18px; height: 18px; display: block; }
+.navigation-bar .tree-node-icon.task-icon .task-ring { stroke: #8891a8; stroke-width: 1.8; }
+.navigation-bar .tree-node-icon.task-icon .task-ring-check { display: none; stroke: #ffffff; stroke-width: 2; }
+.navigation-bar .tree-node.is-selected .tree-node-icon.task-icon .task-ring { stroke: #4c6ef5; }
+.navigation-bar .tree-node.task.is-completed .tree-node-icon.task-icon .task-ring { stroke: #2b8a66; fill: #2b8a66; }
+.navigation-bar .tree-node.task.is-completed .tree-node-icon.task-icon .task-ring-check { display: block; }
+
+/* Depth-tiered left bars + leaf-folder card */
+.navigation-bar .navigation-node-row.navigation-depth-0 { box-shadow: inset 3px 0 0 var(--nav-area-1); border-radius: 0 8px 8px 0; }
+.navigation-bar .navigation-node-row.navigation-depth-1 { box-shadow: inset 2px 0 0 rgba(99,102,241,0.6); }
+.navigation-bar .navigation-node-row.is-leaf-folder { box-shadow: none; margin: 5px 4px 0; background: #ffffff; border: 1px solid #e6e9f1; border-bottom: none; border-radius: 11px 11px 0 0; }
+.navigation-bar .navigation-node-row.task-in-card { margin: 0 4px; background: #ffffff; border-left: 1px solid #e6e9f1; border-right: 1px solid #e6e9f1; box-shadow: none; }
+.navigation-bar .navigation-node-row.task-in-card.is-card-end { margin: 0 4px 6px; border-bottom: 1px solid #e6e9f1; border-radius: 0 0 11px 11px; padding-bottom: 2px; }
+
+
+/* Collapsed folder: rotate board icon 90deg (chevron lacks is-expanded) */
+.navigation-bar .tree-node.folder .tree-node-chevron:not(.is-expanded) + .tree-node-icon.folder-icon svg { transform: rotate(90deg); }
+.navigation-bar .tree-node-icon.folder-icon svg { transition: transform 150ms ease; }
+
+/* =====================================================================
+   Navigation redesign v1.1 — LIGHT theme (option A). Appended last.
+   Bright sidebar, high-contrast ink, mid-tone area cards.
+   ===================================================================== */
+.navigation-bar {
+  --navL-bg: #eef1f6;
+  --navL-area: #e2e6ef;
+  --navL-card: #dfe3ee;
+  --navL-line: #cdd3e0;
+  --navL-ink: #1f2430;
+  --navL-ink-soft: #414a5c;
+  --navL-muted: #6b7488;
+  --navL-accent: #4c6ef5;
+  background: #eef1f6;
+  border-right: 1px solid #d7dce6;
+}
+/* Header / brand / search / smart views / account — light high-contrast */
+.navigation-bar .navigation-title { color: #1b2230 !important; }
+.navigation-bar .navigation-subtitle { color: #6b7488 !important; }
+.navigation-bar .navigation-brand-mark { background: linear-gradient(135deg,#4c6ef5,#3b5bdb); color: #fff; }
+.navigation-bar .navigation-add-button { background: linear-gradient(135deg,#4c6ef5,#3b5bdb); color:#fff; }
+.navigation-bar .navigation-collapse-button { color:#5a6479; border-color:#cdd3e0; }
+.navigation-bar .navigation-search input { background:#ffffff; border:1px solid #cdd3e0; color:#1f2430; }
+.navigation-bar .navigation-search input::placeholder { color:#8b93a5; }
+.navigation-bar .navigation-search-icon { color:#8b93a5; }
+.navigation-bar .navigation-search kbd { background:#e2e6ef; border-color:#cdd3e0; color:#5a6479; }
+.navigation-bar .navigation-smart-views button { background:#e2e6ef; border:1px solid #cdd3e0; color:#414a5c; }
+.navigation-bar .navigation-smart-views button { color:#414a5c; }
+.navigation-bar .navigation-smart-views button.is-active { background:linear-gradient(135deg,#4c6ef5,#3b5bdb); border-color:transparent; color:#ffffff; }
+.navigation-bar .navigation-smart-views button.is-trash { color:#b5485a; }
+.navigation-bar .navigation-smart-views button.is-trash.is-active { background:linear-gradient(135deg,#e0607a,#c6455f); color:#fff; }
+.navigation-bar .navigation-scope-filter button { background:#e2e6ef; color:#414a5c; }
+.navigation-bar .navigation-scope-filter button.is-active { background:linear-gradient(135deg,#4c6ef5,#3b5bdb); color:#fff; }
+.navigation-bar .completed-visibility-toggle.is-navigation { background:#e2e6ef; border:1px solid #cdd3e0; color:#414a5c; }
+.navigation-bar .completed-visibility-toggle.is-navigation.is-active { background:linear-gradient(135deg,#4c6ef5,#3b5bdb); color:#fff; border-color:transparent; }
+.navigation-bar .navigation-briefing-button { background:#e2e6ef; border:1px solid #cdd3e0; }
+.navigation-bar .navigation-briefing-button strong { color:#1b2230; }
+.navigation-bar .navigation-briefing-button small { color:#6b7488; }
+.navigation-bar .navigation-briefing-icon { background:rgba(76,110,245,0.16); color:#3b5bdb; }
+.navigation-bar .navigation-section-header { color:#6b7488; }
+.navigation-bar .navigation-section-header span:last-child { background:#dfe3ee; color:#3b5bdb; }
+.navigation-bar .navigation-account-card { background:#e2e6ef; border:1px solid #cdd3e0; }
+.navigation-bar .navigation-account-copy strong { color:#1b2230; }
+.navigation-bar .navigation-account-copy span { color:#6b7488; }
+.navigation-bar .navigation-account-actions button { background:#ffffff; border:1px solid #cdd3e0; color:#414a5c; }
+.navigation-bar .navigation-more-button { color:#6b7488; }
+/* Tree nodes — light theme, high contrast text */
+.navigation-bar .tree-node { color:#2a3142; }
+.navigation-bar .tree-node .tree-node-label { color:#2a3142; }
+.navigation-bar .tree-node.folder .tree-node-label { color:#141a26; font-weight:700; }
+.navigation-bar .tree-node:hover { background:rgba(76,110,245,0.10); color:#141a26; }
+.navigation-bar .tree-node.is-selected { background:linear-gradient(135deg,#4c6ef5,#3b5bdb); color:#ffffff; box-shadow:inset 3px 0 0 #8ea6ff; }
+.navigation-bar .tree-node.is-selected .tree-node-label { color:#ffffff; }
+.navigation-bar .tree-node-chevron { color:#6b7488; }
+.navigation-bar .tree-node.folder:hover .tree-node-chevron { color:#3b5bdb; background:rgba(76,110,245,0.14); }
+.navigation-bar .tree-node.is-selected .tree-node-chevron { color:#ffffff; }
+.navigation-bar .tree-node-icon.folder-icon .board-bar { fill:#5566cc; }
+.navigation-bar .tree-node.is-selected .tree-node-icon.folder-icon .board-bar { fill:#ffffff; }
+.navigation-bar .tree-node-icon.task-icon .task-ring { stroke:#7681a0; }
+.navigation-bar .tree-node.is-selected .tree-node-icon.task-icon .task-ring { stroke:#ffffff; }
+
+/* Depth-tiered left bars on light bg */
+.navigation-bar .navigation-node-row.navigation-depth-0 { box-shadow: inset 3px 0 0 #6366f1; border-radius:0 8px 8px 0; }
+.navigation-bar .navigation-node-row.navigation-depth-1 { box-shadow: inset 2px 0 0 rgba(99,102,241,0.55); }
+/* Leaf-folder card — mid-tone, rounded even when collapsed */
+.navigation-bar .navigation-node-row.is-leaf-folder {
+  box-shadow: none;
+  margin: 6px 5px 0;
+  background: #dfe3ee;
+  border: 1px solid #cbd2e0;
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+}
+/* When the leaf folder is collapsed (chevron not expanded), keep all corners rounded */
+.navigation-bar .navigation-node-row.is-leaf-folder:has(.tree-node-chevron:not(.is-expanded)) {
+  margin: 6px 5px 4px;
+  border: 1px solid #cbd2e0;
+  border-radius: 12px;
+}
+/* Tasks inside the card — mid-tone body, connected look */
+.navigation-bar .navigation-node-row.task-in-card {
+  margin: 0 5px;
+  background: #dfe3ee;
+  border-left: 1px solid #cbd2e0;
+  border-right: 1px solid #cbd2e0;
+  box-shadow: none;
+}
+.navigation-bar .navigation-node-row.task-in-card.is-card-end {
+  margin: 0 5px 4px;
+  border-bottom: 1px solid #cbd2e0;
+  border-radius: 0 0 12px 12px;
+  padding-bottom: 3px;
+}
+/* Replace short branch glyphs with a continuous vertical connector for tasks */
+.navigation-bar .tree-node-branch.is-child { font-size: 0; width: 22px; position: relative; }
+.navigation-bar .tree-node-branch.is-child::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: -8px;
+  bottom: -8px;
+  width: 2px;
+  border-radius: 2px;
+  background: #b7c0d6;
+}
+.navigation-bar .tree-node-branch.is-child::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: #b7c0d6;
+}
+.navigation-bar .tree-node.is-selected .tree-node-branch.is-child::before,
+.navigation-bar .tree-node.is-selected .tree-node-branch.is-child::after { background: #c9d5ff; }
+/* =====================================================================
+   Continuous depth guide lines through card areas (final override).
+   The left color bar for depth 0/1 must stay visible even inside the
+   leaf-folder card, so the guide line runs unbroken across siblings.
+   ===================================================================== */
+.navigation-bar .navigation-tree { position: relative; }
+/* Keep depth bars on every row including card rows */
+.navigation-bar .navigation-node-row.navigation-depth-0 { box-shadow: inset 3px 0 0 #6366f1 !important; }
+.navigation-bar .navigation-node-row.navigation-depth-1 { box-shadow: inset 2px 0 0 rgba(99,102,241,0.55) !important; }
+.navigation-bar .navigation-node-row.navigation-depth-2 { box-shadow: inset 2px 0 0 rgba(99,102,241,0.4) !important; }
+.navigation-bar .navigation-node-row.navigation-depth-3 { box-shadow: inset 2px 0 0 rgba(99,102,241,0.32) !important; }
+.navigation-bar .navigation-node-row.navigation-depth-4 { box-shadow: inset 2px 0 0 rgba(99,102,241,0.28) !important; }
+/* Leaf card: shift right a touch so the guide line sits to its left, unbroken */
+.navigation-bar .navigation-node-row.is-leaf-folder {
+  margin-left: 12px;
+  border-radius: 12px 12px 0 0;
+}
+.navigation-bar .navigation-node-row.is-leaf-folder:has(.tree-node-chevron:not(.is-expanded)) {
+  border-radius: 12px;
+  margin-bottom: 4px;
+}
+.navigation-bar .navigation-node-row.task-in-card { margin-left: 12px; }
+.navigation-bar .navigation-node-row.task-in-card.is-card-end { margin-left: 12px; }
+/* =====================================================================
+   Navigation min-width + top-level leaf folder alignment fix (final).
+   ===================================================================== */
+.navigation-bar { min-width: 372px; }
+
+/* Top-level (depth 0) leaf folder must NOT be pushed right */
+.navigation-bar .navigation-node-row.navigation-depth-0.is-leaf-folder { margin-left: 0 !important; }
+.navigation-bar .navigation-node-row.navigation-depth-0.is-leaf-folder:has(.tree-node-chevron:not(.is-expanded)) { margin-left: 0 !important; }
+/* Its child tasks-in-card also align to the top-level start */
+.navigation-bar .navigation-node-row.navigation-depth-1.task-in-card { margin-left: 0 !important; }
+/* Expand/collapse-all as text buttons under the section header */
+.navigation-bar .navigation-tree-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 0 4px 8px;
+}
+.navigation-bar .navigation-tree-toggle-text {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #cdd3e0;
+  border-radius: 7px;
+  background: #e6eaf3;
+  color: #414a5c;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.navigation-bar .navigation-tree-toggle-text:hover {
+  border-color: #4c6ef5;
+  color: #2f3ba8;
+  background: #dfe4fb;
+}
+/* Keep header actions on one row */
+.navigation-bar .navigation-header-actions { flex-wrap: nowrap; }
+/* Prevent smart-view chips and toolbar buttons from wrapping to two lines */
+.navigation-bar .navigation-smart-views button,
+.navigation-bar .navigation-scope-filter button,
+.navigation-bar .navigation-tree-toggle-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

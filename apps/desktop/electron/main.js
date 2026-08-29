@@ -66,6 +66,7 @@ import {
   setTaskFavoriteOnServer,
   setSyncRequestContext,
   setNavigationExpandedOnServer,
+  setAllNavigationExpandedOnServer,
   toggleSubTaskOnServer,
   toggleTaskOnServer,
   touchTaskRecentOnServer,
@@ -1223,6 +1224,9 @@ function registerIpcHandlers() {
       payload.nodeId,
       payload.expanded,
     ),
+  )
+  handleAuthenticated('navigation:setAllExpanded', (_event, payload) =>
+    setAllNavigationExpandedOnServer(currentAuthToken, payload.expanded),
   )
 
   handleAuthenticated('workspace:getTasks', (_event, payload = {}) =>

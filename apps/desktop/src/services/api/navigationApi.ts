@@ -131,6 +131,14 @@ export async function setNavigationNodeExpanded(
   return window.api.navigation.setExpanded(nodeId, expanded)
 }
 
+export async function setAllNavigationExpanded(expanded: boolean) {
+  if (!window.api?.navigation?.setAllExpanded) {
+    throw new Error('navigation setAllExpanded API is not available')
+  }
+
+  return window.api.navigation.setAllExpanded(expanded)
+}
+
 export async function getTrashNodes() {
   if (!window.api?.navigation?.getTrash) {
     throw new Error('navigation getTrash API is not available')

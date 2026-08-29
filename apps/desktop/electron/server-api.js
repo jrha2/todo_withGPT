@@ -341,6 +341,14 @@ export async function setNavigationExpandedOnServer(
   return data.node
 }
 
+export async function setAllNavigationExpandedOnServer(token, expanded) {
+  const data = await request(
+    '/api/navigation/expand-all',
+    { method: 'PUT', token, body: { expanded } },
+  )
+  return data.result
+}
+
 export async function getTaskFromServer(token, taskId) {
   const data = await request(`/api/tasks/${encodeURIComponent(taskId)}`, {
     token,

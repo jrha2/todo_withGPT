@@ -113,6 +113,7 @@ declare global {
           position: 'before' | 'after' | 'inside',
         ) => Promise<unknown>
         setExpanded: (nodeId: string, expanded: boolean) => Promise<unknown>
+        setAllExpanded: (expanded: boolean) => Promise<unknown>
       }
       workspace: {
         getTasks: (
