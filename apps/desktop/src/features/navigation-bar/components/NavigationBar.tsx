@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, MouseEvent } from 'react'
 import type { AuthUser } from '../../../services/api/authApi'
 import type {
@@ -188,6 +188,7 @@ function NavigationBar({
   const [mutationError, setMutationError] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
   const selectedNodeRef = useRef<HTMLDivElement>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
   const isSearching = searchQuery.trim().length > 0
 
   useEffect(() => {
@@ -373,15 +374,47 @@ function NavigationBar({
     event.preventDefault()
     event.stopPropagation()
 
-    const menuWidth = 176
-    const menuHeight = nodeType === 'folder' ? 260 : 205
+    // Anchor at the click point. The exact rendered size is measured in a
+    // layout effect and the position is corrected to stay within the viewport
+    // (e.g. flipped upward when opening from a bottom row), so no hard-coded
+    // menu height is relied upon here.
     setMenuState({
       nodeId,
       nodeType,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      x: event.clientX,
+      y: event.clientY,
     })
   }
+
+  // After the menu renders, measure its real size and nudge it back inside the
+  // viewport: if it overflows the bottom edge, shift it up (placing it above the
+  // cursor when needed); likewise clamp the right/left/top edges.
+  useLayoutEffect(() => {
+    if (!menuState) return
+    const menuElement = contextMenuRef.current
+    if (!menuElement) return
+
+    const margin = 8
+    const { width, height } = menuElement.getBoundingClientRect()
+    const maxX = window.innerWidth - width - margin
+    const maxY = window.innerHeight - height - margin
+
+    let nextX = menuState.x
+    let nextY = menuState.y
+
+    if (nextY > maxY) {
+      // Prefer opening upward from the cursor so the menu stays fully visible.
+      nextY = Math.max(margin, menuState.y - height)
+    }
+    nextX = Math.max(margin, Math.min(nextX, maxX))
+    nextY = Math.max(margin, Math.min(nextY, maxY))
+
+    if (nextX !== menuState.x || nextY !== menuState.y) {
+      setMenuState((current) =>
+        current ? { ...current, x: nextX, y: nextY } : current,
+      )
+    }
+  }, [menuState])
 
   const handleOpenRename = () => {
     if (!menuState) {
@@ -708,7 +741,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.2.1</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.2.2</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -1220,6 +1253,7 @@ function NavigationBar({
 
       {menuState && (
         <div
+          ref={contextMenuRef}
           className="navigation-context-menu"
           style={{
             left: `${menuState.x}px`,
