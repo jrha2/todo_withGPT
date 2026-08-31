@@ -91,6 +91,12 @@ type NavigationNode = {
 }
 
 type TaskId = string
+type ContentView = 'task' | 'briefing' | 'workspace' | 'trash'
+type ViewSnapshot = {
+  activeView: ContentView
+  selectedTaskId: string
+  workspaceView: WorkspaceView
+}
 type TaskDetail = {
   id: string
   navNodeId: string
@@ -166,8 +172,15 @@ function MainLayout({
   const [navigationTree, setNavigationTree] = useState<NavigationNode[]>([])
   const [taskDetails, setTaskDetails] = useState<Record<string, TaskDetail>>({})
   const [assigneeUsers, setAssigneeUsers] = useState<AssigneeUser[]>([])
-  const [activeView, setActiveView] = useState<'task' | 'briefing' | 'workspace' | 'trash'>('task')
+  const [activeView, setActiveView] = useState<ContentView>('task')
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('today')
+  // Back-navigation history for the right-hand content area. Each entry is a
+  // snapshot of what the content pane was showing (view + which task/workspace
+  // view). The previous snapshot is pushed whenever the shown view changes, so
+  // "back" can restore exactly the screen that was visible just before.
+  const [viewHistory, setViewHistory] = useState<ViewSnapshot[]>([])
+  const previousViewKeyRef = useRef<ViewSnapshot | null>(null)
+  const isRestoringViewRef = useRef(false)
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false)
   const [quickCreateTitle, setQuickCreateTitle] = useState('')
   const [quickCreateParentId, setQuickCreateParentId] = useState('root')
@@ -1153,6 +1166,29 @@ function MainLayout({
     setActiveView(view)
   }
 
+  const handleGoBack = () => {
+    if (viewHistory.length === 0) return
+    if (!confirmDiscardDirtyDrafts()) return
+
+    const previous = viewHistory[viewHistory.length - 1]
+    // Suppress the history-tracking effect while we restore, so returning to a
+    // previous screen does not itself get recorded as a new step.
+    isRestoringViewRef.current = true
+    setViewHistory((history) => history.slice(0, -1))
+
+    if (previous.activeView === 'task') {
+      if (previous.selectedTaskId && previous.selectedTaskId !== selectedTaskId) {
+        setTaskDetails({})
+        expandTaskAncestors(previous.selectedTaskId)
+      }
+      setSelectedTaskId(previous.selectedTaskId)
+    }
+    if (previous.activeView === 'workspace') {
+      setWorkspaceView(previous.workspaceView)
+    }
+    setActiveView(previous.activeView)
+  }
+
   const handleOpenSearchHit = (hit: NavigationSearchHit) => {
     if (!hit.taskId || !confirmDiscardDirtyDrafts()) return
     setTaskDetails({})
@@ -1189,6 +1225,36 @@ function MainLayout({
     window.addEventListener('keydown', handleQuickCreateShortcut)
     return () => window.removeEventListener('keydown', handleQuickCreateShortcut)
   }, [])
+
+  // Record the previous content-pane screen whenever the shown view changes,
+  // so the back button can return to exactly what was visible before. A task
+  // view is only keyed by its own id (not workspaceView) and vice versa, so
+  // switching tasks or smart views each count as a distinct step.
+  useEffect(() => {
+    const currentKey: ViewSnapshot = { activeView, selectedTaskId, workspaceView }
+    const previousKey = previousViewKeyRef.current
+    previousViewKeyRef.current = currentKey
+
+    if (isRestoringViewRef.current) {
+      isRestoringViewRef.current = false
+      return
+    }
+    if (!previousKey) return
+
+    const isSameView =
+      previousKey.activeView === currentKey.activeView
+      && (currentKey.activeView !== 'task'
+        || previousKey.selectedTaskId === currentKey.selectedTaskId)
+      && (currentKey.activeView !== 'workspace'
+        || previousKey.workspaceView === currentKey.workspaceView)
+    if (isSameView) return
+
+    // Skip empty task snapshots (no task is actually shown) so back never lands
+    // on a blank screen.
+    if (previousKey.activeView === 'task' && !previousKey.selectedTaskId) return
+
+    setViewHistory((history) => [...history, previousKey])
+  }, [activeView, selectedTaskId, workspaceView])
 
   useEffect(() => {
     const dirty = isQuickCreateOpen && Boolean(quickCreateTitle.trim())
@@ -1294,6 +1360,20 @@ function MainLayout({
 
       <main className="detail-screen">
         <div className="detail-content">
+          {viewHistory.length > 0 && (
+            <div className="detail-back-bar">
+              <button
+                className="detail-back-button"
+                type="button"
+                aria-label="이전 화면으로 뒤로가기"
+                title="이전 화면으로 뒤로가기"
+                onClick={handleGoBack}
+              >
+                <span aria-hidden="true">←</span>
+                뒤로가기
+              </button>
+            </div>
+          )}
           {activeView === 'briefing' ? (
             <ToDoBriefing key={userRevision} onOpenTask={handleSelectTask} remoteRefreshRevision={remoteRefreshRevision} onRemoteRefreshComplete={handleChildRemoteRefresh} />
           ) : activeView === 'workspace' ? (

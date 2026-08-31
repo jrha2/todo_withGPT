@@ -1576,6 +1576,41 @@
   gap: 12px;
 }
 
+.detail-back-bar {
+  display: flex;
+  align-items: center;
+}
+
+.detail-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px 7px 11px;
+  border: 1px solid #d9dde7;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #4a4f5c;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.detail-back-button span {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.detail-back-button:hover {
+  background: #f0f1f7;
+  border-color: #b9c0d0;
+  color: #2c3040;
+}
+
+.detail-back-button:active {
+  background: #e6e8f2;
+}
+
 .selected-task-detail {
   min-width: 0;
   display: flex;
