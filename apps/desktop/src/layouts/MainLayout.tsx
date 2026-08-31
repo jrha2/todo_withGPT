@@ -1094,9 +1094,55 @@ function MainLayout({
   }
 
   const selectedTaskDetail = taskDetails[selectedTaskId]
+
+  // Expand every ancestor folder of a Task so it becomes visible in the
+  // Navigation tree. Used when a Task is opened from a place other than the
+  // tree itself (e.g. the briefing screen), where the containing folder may be
+  // collapsed. Only the specific ancestor chain is expanded and persisted with
+  // per-node calls; this must NOT be confused with the expand/collapse-all
+  // action, which uses the dedicated bulk API.
+  const expandTaskAncestors = (taskId: string) => {
+    const nodesById = new Map(navigationTree.map((node) => [node.id, node]))
+    const taskNode = nodesById.get(taskId)
+    if (!taskNode) return
+
+    const collapsedAncestorIds: string[] = []
+    let ancestorId = taskNode.parentId
+    while (ancestorId) {
+      const ancestor = nodesById.get(ancestorId)
+      if (!ancestor || ancestor.type !== 'folder') break
+      if (!ancestor.expanded) collapsedAncestorIds.push(ancestor.id)
+      ancestorId = ancestor.parentId
+    }
+
+    if (collapsedAncestorIds.length === 0) return
+
+    const collapsedAncestorIdSet = new Set(collapsedAncestorIds)
+
+    // Optimistically flip the ancestor chain so the Task shows immediately.
+    setNavigationTree((prev) =>
+      prev.map((node) =>
+        collapsedAncestorIdSet.has(node.id) && node.type === 'folder'
+          ? { ...node, expanded: true }
+          : node,
+      ),
+    )
+
+    // Persist each ancestor's expanded state; refresh from the server on failure.
+    void Promise.all(
+      collapsedAncestorIds.map((folderId) =>
+        setNavigationNodeExpanded(folderId, true),
+      ),
+    ).catch(async (error) => {
+      console.error('Failed to expand ancestor folders:', error)
+      await loadTree()
+    })
+  }
+
   const handleSelectTask = (taskId: string) => {
     if (taskId !== selectedTaskId && !confirmDiscardDirtyDrafts()) return
     if (taskId !== selectedTaskId) setTaskDetails({})
+    expandTaskAncestors(taskId)
     setSelectedTaskId(taskId)
     setActiveView('task')
   }

@@ -187,6 +187,7 @@ function NavigationBar({
   const [deleteError, setDeleteError] = useState('')
   const [mutationError, setMutationError] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const selectedNodeRef = useRef<HTMLDivElement>(null)
   const isSearching = searchQuery.trim().length > 0
 
   useEffect(() => {
@@ -219,6 +220,17 @@ function NavigationBar({
     window.addEventListener('keydown', handleSearchShortcut)
     return () => window.removeEventListener('keydown', handleSearchShortcut)
   }, [onSearchQueryChange])
+
+  // When a Task is selected (including from the briefing screen, which expands
+  // the containing folders), scroll the selected node into view so it lines up
+  // with clicking it directly in the tree.
+  useEffect(() => {
+    if (!selectedTaskId) return
+    const timer = window.setTimeout(() => {
+      selectedNodeRef.current?.scrollIntoView({ block: 'nearest' })
+    }, 60)
+    return () => window.clearTimeout(timer)
+  }, [selectedTaskId, tree])
 
   const displayTree = useMemo(
     () => showCompletedTasks
@@ -696,7 +708,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.2.0</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.2.1</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -1052,6 +1064,7 @@ function NavigationBar({
                 .join(' ')}
               data-depth={Math.min(node.depth, 4)}
               key={node.id}
+              ref={selectedTaskId === node.id ? selectedNodeRef : undefined}
               draggable={!isEditing && !isSearching}
               onContextMenu={(event) => openMenu(event, node.id, node.type)}
               onDragStart={(event) => handleNodeDragStart(event, node.id)}

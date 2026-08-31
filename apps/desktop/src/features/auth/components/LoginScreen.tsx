@@ -62,7 +62,7 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
       <section className="login-card">
         <div className="login-brand-mark">✓</div>
         <div className="login-heading">
-          <span>투자기획팀 업무관리 공간 · VERSION 1.2.0</span>
+          <span>투자기획팀 업무관리 공간 · VERSION 1.2.1</span>
           <h1>다시 만나서 반가워요</h1>
           <p>팀 계정으로 로그인해 Task와 알림을 이어서 관리하세요.</p>
         </div>
