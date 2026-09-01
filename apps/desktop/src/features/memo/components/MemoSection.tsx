@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RichMemoRecord } from '../../../services/api/memoApi'
 import { setDraftDirty } from '../../../services/draftRegistry'
+import MemoEditor from './MemoEditor'
 
 type CommentItem = {
   id: string
@@ -229,52 +230,20 @@ function MemoSection({
   }
 
   const renderMemoEditor = () => (
-    <div className="rich-memo-editor-wrap">
-      <div className="rich-memo-toolbar" aria-label="메모 서식">
-        <button
-          type="button"
-          title="굵게"
-          onMouseDown={(event) => {
-            event.preventDefault()
-            applyMemoFormat('bold')
-          }}
-        >
-          <strong>B</strong>
-        </button>
-        <span className="rich-memo-toolbar-divider" />
-        {memoColors.map((color) => (
-          <button
-            className="memo-color-button"
-            type="button"
-            title={`${color.label} 글자색`}
-            aria-label={`${color.label} 글자색`}
-            key={color.value}
-            onMouseDown={(event) => {
-              event.preventDefault()
-              applyMemoFormat('foreColor', color.value)
-            }}
-          >
-            <span style={{ backgroundColor: color.value }} />
-          </button>
-        ))}
-      </div>
-      <div
-        className="rich-memo-editor"
-        contentEditable
-        suppressContentEditableWarning
-        ref={memoEditorRef}
-        dangerouslySetInnerHTML={{ __html: sanitizeMemoHtml(editorInitialHtml) }}
-        onInput={(event) => setEditorInitialHtml(event.currentTarget.innerHTML)}
-        data-placeholder="메모 내용을 입력하세요."
-      />
-      {memoError && <div className="task-field-error">{memoError}</div>}
-      <div className="memo-edit-actions">
-        <button type="button" onClick={saveMemoEditor} disabled={isSavingMemo}>
-          {isSavingMemo ? '저장 중...' : '저장'}
-        </button>
-        <button type="button" onClick={closeMemoEditor} disabled={isSavingMemo}>취소</button>
-      </div>
-    </div>
+    <MemoEditor
+      // Remount when the edit target changes so the initial HTML is seeded for
+      // the correct memo and the caret is positioned at its end.
+      key={editingMemoId ?? '__new__'}
+      editorRef={memoEditorRef}
+      initialHtml={sanitizeMemoHtml(editorInitialHtml)}
+      isSaving={isSavingMemo}
+      memoError={memoError}
+      memoColors={memoColors}
+      onChange={setEditorInitialHtml}
+      onFormat={applyMemoFormat}
+      onSave={saveMemoEditor}
+      onCancel={closeMemoEditor}
+    />
   )
 
   const renderCommentNode = (node: CommentNode, depth = 0) => {
