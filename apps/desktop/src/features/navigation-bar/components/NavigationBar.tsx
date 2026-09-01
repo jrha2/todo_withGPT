@@ -753,7 +753,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.2.2</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.3.0</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -1152,6 +1152,31 @@ function NavigationBar({
             >
               {!isEditing ? (
                 <>
+                  {node.type === 'folder' && (
+                    // Dedicated chevron toggle button, rendered as a sibling of
+                    // the main row button so individual expand/collapse always
+                    // works regardless of row drag handling. onMouseDown stops
+                    // propagation so starting the interaction here never begins a
+                    // row drag that would swallow the click.
+                    <button
+                      className={`tree-node-chevron-button ${node.expanded || isSearching ? 'is-expanded' : ''}`}
+                      style={{ marginLeft: `${node.depth * 18}px` }}
+                      type="button"
+                      aria-label={node.expanded ? '폴더 접기' : '폴더 펼치기'}
+                      title={node.expanded ? '폴더 접기' : '폴더 펼치기'}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void onToggleFolder(node.id)
+                      }}
+                    >
+                      <span className="tree-node-chevron" aria-hidden="true">
+                        <svg viewBox="0 0 16 16">
+                          <path d="M6 3.5 10.5 8 6 12.5" />
+                        </svg>
+                      </span>
+                    </button>
+                  )}
                   <button
                     className={[
                       'tree-node',
@@ -1162,7 +1187,7 @@ function NavigationBar({
                     ]
                       .filter(Boolean)
                       .join(' ')}
-                    style={{ marginLeft: `${node.depth * 18}px` }}
+                    style={node.type === 'folder' ? undefined : { marginLeft: `${node.depth * 18}px` }}
                     type="button"
                     onClick={() =>
                       node.type === 'folder'
@@ -1172,14 +1197,6 @@ function NavigationBar({
                   >
                     {node.type === 'folder' ? (
                       <>
-                        <span
-                          className={`tree-node-chevron ${node.expanded || isSearching ? 'is-expanded' : ''}`}
-                          aria-hidden="true"
-                        >
-                          <svg viewBox="0 0 16 16">
-                            <path d="M6 3.5 10.5 8 6 12.5" />
-                          </svg>
-                        </span>
                         <span className="tree-node-icon folder-icon" aria-hidden="true">
                           <svg viewBox="0 0 24 24" fill="none">
                             <rect x="3.5" y="4.5" width="7" height="15" rx="2" className="board-bar board-bar-tall" />

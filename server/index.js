@@ -65,7 +65,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.2.2'
+const serverVersion = '1.3.0'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null

@@ -1310,16 +1310,37 @@
   font-weight: 650;
 }
 
+.tree-node-chevron-button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 7px;
+}
+
+.navigation-node-row .tree-node-chevron-button + .tree-node {
+  /* The chevron button now leads the row, so the folder label button starts
+     right after it without its own indentation. */
+  margin-left: -2px;
+}
+
 .tree-node-chevron {
   width: 22px;
   height: 22px;
   display: grid;
   place-items: center;
   flex: 0 0 22px;
-  margin-left: -5px;
   border-radius: 7px;
   color: #797d8a;
   transition: color 140ms ease, background 140ms ease;
+}
+
+.tree-node-chevron-button:hover .tree-node-chevron {
+  color: #5145bd;
+  background: #e9e7fb;
 }
 
 .tree-node-chevron svg {
