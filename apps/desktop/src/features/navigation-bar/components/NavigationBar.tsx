@@ -34,6 +34,12 @@ type NavigationBarProps = {
   onOpenAdmin: () => void
   onLogout: () => void
   onCollapse: () => void
+  zoomPercent: number
+  canZoomIn: boolean
+  canZoomOut: boolean
+  onZoomIn: () => void
+  onZoomOut: () => void
+  onResetZoom: () => void
   isBriefingActive: boolean
   onOpenBriefing: () => void
   activeSmartView: WorkspaceView | null
@@ -133,6 +139,12 @@ function NavigationBar({
   onOpenAdmin,
   onLogout,
   onCollapse,
+  zoomPercent,
+  canZoomIn,
+  canZoomOut,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
   isBriefingActive,
   onOpenBriefing,
   activeSmartView,
@@ -857,6 +869,39 @@ function NavigationBar({
             <button type="button" onClick={onOpenAdmin}>관리</button>
           )}
           <button type="button" onClick={onLogout}>로그아웃</button>
+        </div>
+      </div>
+
+      <div className="navigation-zoom-control" aria-label="화면 글씨 크기 조절">
+        <span className="navigation-zoom-label">글씨 크기</span>
+        <div className="navigation-zoom-buttons">
+          <button
+            type="button"
+            aria-label="글씨 작게 (Ctrl -)"
+            title="글씨 작게 (Ctrl -)"
+            disabled={!canZoomOut}
+            onClick={onZoomOut}
+          >
+            −
+          </button>
+          <button
+            className="navigation-zoom-reset"
+            type="button"
+            aria-label="기본 크기로 (Ctrl 0)"
+            title="기본 크기로 (Ctrl 0)"
+            onClick={onResetZoom}
+          >
+            {zoomPercent}%
+          </button>
+          <button
+            type="button"
+            aria-label="글씨 크게 (Ctrl +)"
+            title="글씨 크게 (Ctrl +)"
+            disabled={!canZoomIn}
+            onClick={onZoomIn}
+          >
+            +
+          </button>
         </div>
       </div>
 

@@ -53,6 +53,12 @@ declare global {
         deleteUser: (userId: string) => Promise<unknown>
         getUserReferences: (userId: string) => Promise<unknown>
       }
+      zoom: {
+        min: number
+        max: number
+        get: () => number
+        set: (factor: number) => number
+      }
       app: {
         onSelectTask: (callback: (taskId: string) => void) => () => void
         onTaskUpdated: (

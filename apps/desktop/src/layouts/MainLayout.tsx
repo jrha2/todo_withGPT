@@ -8,6 +8,7 @@ import {
 import ToDoBriefing from '../features/briefing/components/ToDoBriefing'
 import MemoSection from '../features/memo/components/MemoSection'
 import NavigationBar from '../features/navigation-bar/components/NavigationBar'
+import { useZoomControl } from '../features/navigation-bar/useZoomControl'
 import SubTaskSection from '../features/sub-task/components/SubTaskSection'
 import TaskHeader from '../features/task/components/TaskHeader'
 import TrashView from '../features/trash/components/TrashView'
@@ -181,6 +182,7 @@ function MainLayout({
   const [viewHistory, setViewHistory] = useState<ViewSnapshot[]>([])
   const previousViewKeyRef = useRef<ViewSnapshot | null>(null)
   const isRestoringViewRef = useRef(false)
+  const zoom = useZoomControl()
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false)
   const [quickCreateTitle, setQuickCreateTitle] = useState('')
   const [quickCreateParentId, setQuickCreateParentId] = useState('root')
@@ -1303,6 +1305,12 @@ function MainLayout({
         onOpenAdmin={onOpenAdmin}
         onLogout={onLogout}
         onCollapse={() => setIsNavigationCollapsed(true)}
+        zoomPercent={zoom.zoomPercent}
+        canZoomIn={zoom.canZoomIn}
+        canZoomOut={zoom.canZoomOut}
+        onZoomIn={zoom.zoomIn}
+        onZoomOut={zoom.zoomOut}
+        onResetZoom={zoom.resetZoom}
         isBriefingActive={activeView === 'briefing'}
         onOpenBriefing={() => handleOpenView('briefing')}
         activeSmartView={activeView === 'workspace' ? workspaceView : null}

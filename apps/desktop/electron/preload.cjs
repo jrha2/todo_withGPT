@@ -1,6 +1,14 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webFrame } = require('electron')
 
 window.__preload_ok = true
+
+const ZOOM_MIN = 0.7
+const ZOOM_MAX = 2.0
+
+function clampZoom(factor) {
+  if (typeof factor !== 'number' || Number.isNaN(factor)) return 1
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor))
+}
 
 contextBridge.exposeInMainWorld('api', {
   auth: {
@@ -19,6 +27,16 @@ contextBridge.exposeInMainWorld('api', {
     deleteUser: (userId) => ipcRenderer.invoke('admin:deleteUser', userId),
     getUserReferences: (userId) =>
       ipcRenderer.invoke('admin:getUserReferences', userId),
+  },
+  zoom: {
+    min: ZOOM_MIN,
+    max: ZOOM_MAX,
+    get: () => webFrame.getZoomFactor(),
+    set: (factor) => {
+      const next = clampZoom(factor)
+      webFrame.setZoomFactor(next)
+      return next
+    },
   },
   app: {
     onSelectTask: (callback) => {

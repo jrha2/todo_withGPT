@@ -3661,6 +3661,60 @@
   background: #fafafd;
 }
 
+.navigation-zoom-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid #e4e4eb;
+  border-radius: 11px;
+  background: #fafafd;
+}
+
+.navigation-zoom-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7488;
+}
+
+.navigation-zoom-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.navigation-zoom-buttons button {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 6px;
+  border: 1px solid #d9dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #3b4252;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.navigation-zoom-buttons .navigation-zoom-reset {
+  min-width: 46px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.navigation-zoom-buttons button:hover:enabled {
+  background: #f0f1f7;
+  border-color: #b9c0d0;
+}
+
+.navigation-zoom-buttons button:disabled {
+  color: #b6bcca;
+  cursor: not-allowed;
+}
+
 .navigation-account-avatar {
   width: 38px;
   height: 38px;
