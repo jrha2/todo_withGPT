@@ -1576,6 +1576,19 @@
   opacity: 1;
 }
 
+/* While dragging the navigation resize handle, suppress text selection across
+   the whole window and keep the resize cursor so the drag never turns into a
+   text selection. */
+body.is-resizing-navigation {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.is-resizing-navigation * {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+
 .detail-screen {
   display: block;
   min-width: 0;

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import ToDoBriefing from '../features/briefing/components/ToDoBriefing'
 import MemoSection from '../features/memo/components/MemoSection'
 import NavigationBar from '../features/navigation-bar/components/NavigationBar'
@@ -276,7 +277,10 @@ function MainLayout({
     }
 
     const handleMouseUp = () => {
-      isDraggingRef.current = false
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false
+        document.body.classList.remove('is-resizing-navigation')
+      }
     }
 
     window.addEventListener('mousemove', handleMouseMove)
@@ -481,8 +485,12 @@ function MainLayout({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remoteRefreshRevision])
 
-  const handleResizeMouseDown = () => {
+  const handleResizeMouseDown = (event: ReactMouseEvent) => {
+    // Prevent the browser from starting a text selection when the resize drag
+    // begins, and suppress selection/caret for the whole drag.
+    event.preventDefault()
     isDraggingRef.current = true
+    document.body.classList.add('is-resizing-navigation')
   }
 
   const handleToggleFolder = async (folderId: string) => {
