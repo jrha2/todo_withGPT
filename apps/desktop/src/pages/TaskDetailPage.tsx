@@ -7,6 +7,7 @@ type TaskDetailPageProps = {
   remoteRefreshRevision: number | null
   onRemoteRefreshComplete: (revision: number, succeeded: boolean) => void
   onOpenAdmin: () => void
+  onOpenAccount: () => void
   onLogout: () => void
 }
 
@@ -16,6 +17,7 @@ function TaskDetailPage({
   remoteRefreshRevision,
   onRemoteRefreshComplete,
   onOpenAdmin,
+  onOpenAccount,
   onLogout,
 }: TaskDetailPageProps) {
   return (
@@ -25,6 +27,7 @@ function TaskDetailPage({
       remoteRefreshRevision={remoteRefreshRevision}
       onRemoteRefreshComplete={onRemoteRefreshComplete}
       onOpenAdmin={onOpenAdmin}
+      onOpenAccount={onOpenAccount}
       onLogout={onLogout}
     />
   )

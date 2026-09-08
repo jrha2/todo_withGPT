@@ -184,6 +184,53 @@ export async function deleteUserOnServer(token, userId) {
   return data.result
 }
 
+export async function signupOnServer(input) {
+  const data = await request('/api/auth/signup', {
+    method: 'POST',
+    body: input,
+  })
+  return data.result
+}
+
+export async function updateOwnProfileOnServer(token, input) {
+  const data = await request('/api/me/profile', {
+    method: 'PUT',
+    token,
+    body: input,
+  })
+  return data.user
+}
+
+export async function changeOwnPasswordOnServer(token, currentPassword, newPassword) {
+  const data = await request('/api/me/password', {
+    method: 'POST',
+    token,
+    body: { currentPassword, newPassword },
+  })
+  return data.result
+}
+
+export async function getPendingUsersFromServer(token) {
+  const data = await request('/api/admin/users/pending', { token })
+  return data.users
+}
+
+export async function approveUserOnServer(token, userId) {
+  const data = await request(
+    `/api/admin/users/${encodeURIComponent(userId)}/approve`,
+    { method: 'POST', token },
+  )
+  return data.user
+}
+
+export async function rejectUserOnServer(token, userId) {
+  const data = await request(
+    `/api/admin/users/${encodeURIComponent(userId)}/reject`,
+    { method: 'POST', token },
+  )
+  return data.result
+}
+
 export async function getAssigneesFromServer(token) {
   const data = await request('/api/users/assignees', { token })
   return data.users

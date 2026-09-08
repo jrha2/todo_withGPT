@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld('api', {
     login: (loginId, password) =>
       ipcRenderer.invoke('auth:login', { loginId, password }),
     logout: () => ipcRenderer.invoke('auth:logout'),
+    signup: (input) => ipcRenderer.invoke('auth:signup', input),
+  },
+  me: {
+    updateProfile: (input) => ipcRenderer.invoke('me:updateProfile', input),
+    changePassword: (currentPassword, newPassword) =>
+      ipcRenderer.invoke('me:changePassword', { currentPassword, newPassword }),
   },
   admin: {
     getUsers: () => ipcRenderer.invoke('admin:getUsers'),
@@ -27,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
     deleteUser: (userId) => ipcRenderer.invoke('admin:deleteUser', userId),
     getUserReferences: (userId) =>
       ipcRenderer.invoke('admin:getUserReferences', userId),
+    getPendingUsers: () => ipcRenderer.invoke('admin:getPendingUsers'),
+    approveUser: (userId) => ipcRenderer.invoke('admin:approveUser', userId),
+    rejectUser: (userId) => ipcRenderer.invoke('admin:rejectUser', userId),
   },
   zoom: {
     min: ZOOM_MIN,

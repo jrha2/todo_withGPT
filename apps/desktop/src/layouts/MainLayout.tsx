@@ -157,6 +157,7 @@ type MainLayoutProps = {
   remoteRefreshRevision: number | null
   onRemoteRefreshComplete: (revision: number, succeeded: boolean) => void
   onOpenAdmin: () => void
+  onOpenAccount: () => void
   onLogout: () => void
 }
 
@@ -166,6 +167,7 @@ function MainLayout({
   remoteRefreshRevision,
   onRemoteRefreshComplete,
   onOpenAdmin,
+  onOpenAccount,
   onLogout,
 }: MainLayoutProps) {
   const [navigationWidth, setNavigationWidth] = useState(MIN_NAVIGATION_WIDTH)
@@ -1311,6 +1313,7 @@ function MainLayout({
       {!isNavigationCollapsed && <NavigationBar
         currentUser={currentUser}
         onOpenAdmin={onOpenAdmin}
+        onOpenAccount={onOpenAccount}
         onLogout={onLogout}
         onCollapse={() => setIsNavigationCollapsed(true)}
         zoomPercent={zoom.zoomPercent}

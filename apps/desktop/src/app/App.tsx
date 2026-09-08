@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminUserManager from '../features/admin/components/AdminUserManager'
+import MyAccountModal from '../features/account/components/MyAccountModal'
 import LoginScreen from '../features/auth/components/LoginScreen'
 import TaskDetailPage from '../pages/TaskDetailPage'
 import { getAuthSession, logout, type AuthUser } from '../services/api/authApi'
@@ -15,6 +16,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
   const [isSessionLoading, setIsSessionLoading] = useState(true)
   const [isAdminOpen, setIsAdminOpen] = useState(false)
+  const [isAccountOpen, setIsAccountOpen] = useState(false)
   const [userRevision, setUserRevision] = useState(0)
   const [remoteRefreshRevision, setRemoteRefreshRevision] = useState<number | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
@@ -151,6 +153,11 @@ function App() {
     setIsAdminOpen(true)
   }
 
+  const handleOpenAccount = () => {
+    if (!confirmDiscardDirtyDrafts('저장하지 않은 변경사항이 있습니다. 변경사항을 버리고 내 계정 화면으로 이동하시겠습니까?')) return
+    setIsAccountOpen(true)
+  }
+
   if (isSessionLoading) {
     return <main className="session-loading-screen"><div className="login-brand-mark">✓</div><span>로그인 정보를 확인하고 있습니다...</span></main>
   }
@@ -165,6 +172,7 @@ function App() {
         remoteRefreshRevision={remoteRefreshRevision}
         onRemoteRefreshComplete={handleRemoteRefreshComplete}
         onOpenAdmin={handleOpenAdmin}
+        onOpenAccount={handleOpenAccount}
         onLogout={handleLogout}
       />
       <div className={`sync-phase-indicator is-${phase}`} role="status">
@@ -176,6 +184,13 @@ function App() {
       {syncApplyError && <div className="sync-error-banner" role="alert">{syncApplyError}</div>}
       {isAdminOpen && currentUser.role === 'admin' && (
         <AdminUserManager currentUser={currentUser} onClose={() => setIsAdminOpen(false)} onCurrentUserUpdated={setCurrentUser} onUsersChanged={() => setUserRevision((revision) => revision + 1)} />
+      )}
+      {isAccountOpen && (
+        <MyAccountModal
+          currentUser={currentUser}
+          onClose={() => setIsAccountOpen(false)}
+          onProfileUpdated={setCurrentUser}
+        />
       )}
     </>
   )

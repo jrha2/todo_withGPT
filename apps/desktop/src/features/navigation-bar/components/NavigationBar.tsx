@@ -32,6 +32,7 @@ type RenderNode = NavigationNode & {
 type NavigationBarProps = {
   currentUser: AuthUser
   onOpenAdmin: () => void
+  onOpenAccount: () => void
   onLogout: () => void
   onCollapse: () => void
   zoomPercent: number
@@ -137,6 +138,7 @@ function renderHighlightedSnippet(hit: NavigationSearchHit) {
 function NavigationBar({
   currentUser,
   onOpenAdmin,
+  onOpenAccount,
   onLogout,
   onCollapse,
   zoomPercent,
@@ -753,7 +755,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.3.1</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.4.0</div>
           </div>
         </div>
         <div className="navigation-header-actions">
@@ -865,6 +867,7 @@ function NavigationBar({
           <span>{currentUser.loginId} · {currentUser.role === 'admin' ? '관리자' : '사용자'}</span>
         </div>
         <div className="navigation-account-actions">
+          <button type="button" onClick={onOpenAccount}>내 계정</button>
           {currentUser.role === 'admin' && (
             <button type="button" onClick={onOpenAdmin}>관리</button>
           )}

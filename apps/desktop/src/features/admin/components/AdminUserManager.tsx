@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react'
 import {
+  approvePendingUser,
   createManagedUser,
   deleteManagedUser,
   getManagedUsers,
   getManagedUserReferences,
+  getPendingUsers,
+  rejectPendingUser,
   updateManagedUser,
   type AuthUser,
   type ManagedUserInput,
   type ManagedUserReferences,
+  type PendingUser,
 } from '../../../services/api/authApi'
 
 type AdminUserManagerProps = {
@@ -71,6 +75,8 @@ function AdminUserManager({
   const [deleteReferences, setDeleteReferences] = useState<ManagedUserReferences | null>(null)
   const [isLoadingReferences, setIsLoadingReferences] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([])
+  const [pendingBusyId, setPendingBusyId] = useState<string | null>(null)
 
   const loadUsers = async (nextSelectedId?: string) => {
     const nextUsers = await getManagedUsers()
@@ -82,6 +88,14 @@ function AdminUserManager({
       if (selected) {
         selectUser(selected)
       }
+    }
+  }
+
+  const loadPending = async () => {
+    try {
+      setPendingUsers(await getPendingUsers())
+    } catch (error) {
+      console.error('Failed to load pending users:', error)
     }
   }
 
@@ -103,10 +117,44 @@ function AdminUserManager({
         }
       })
 
+    getPendingUsers()
+      .then((next) => { if (isMounted) setPendingUsers(next) })
+      .catch((error) => console.error('Failed to load pending users:', error))
+
     return () => {
       isMounted = false
     }
   }, [])
+
+  const handleApprove = async (userId: string) => {
+    setPendingBusyId(userId)
+    setErrorMessage('')
+    try {
+      await approvePendingUser(userId)
+      await loadPending()
+      await loadUsers()
+      onUsersChanged()
+    } catch (error) {
+      console.error('Failed to approve user:', error)
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setPendingBusyId(null)
+    }
+  }
+
+  const handleReject = async (userId: string) => {
+    setPendingBusyId(userId)
+    setErrorMessage('')
+    try {
+      await rejectPendingUser(userId)
+      await loadPending()
+    } catch (error) {
+      console.error('Failed to reject user:', error)
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setPendingBusyId(null)
+    }
+  }
 
   function selectUser(user: AuthUser) {
     setSelectedUserId(user.id)
@@ -211,6 +259,40 @@ function AdminUserManager({
             <button className="admin-add-user" type="button" onClick={startCreate}>
               + 새 사용자
             </button>
+
+            {pendingUsers.length > 0 && (
+              <div className="admin-pending-section">
+                <div className="admin-pending-title">
+                  가입 승인 대기 <span>{pendingUsers.length}</span>
+                </div>
+                {pendingUsers.map((user) => (
+                  <div className="admin-pending-row" key={user.id}>
+                    <div className="admin-pending-info">
+                      <strong>{user.name}</strong>
+                      <small>{user.loginId} · {user.email}</small>
+                    </div>
+                    <div className="admin-pending-actions">
+                      <button
+                        type="button"
+                        className="admin-pending-approve"
+                        disabled={pendingBusyId === user.id}
+                        onClick={() => void handleApprove(user.id)}
+                      >
+                        승인
+                      </button>
+                      <button
+                        type="button"
+                        className="admin-pending-reject"
+                        disabled={pendingBusyId === user.id}
+                        onClick={() => void handleReject(user.id)}
+                      >
+                        거절
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {isLoading ? (
               <div className="admin-list-message">불러오는 중...</div>
             ) : users.map((user) => (

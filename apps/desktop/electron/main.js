@@ -26,6 +26,12 @@ import {
   createSubTaskOnServer,
   createTaskOnServer,
   createUserOnServer,
+  signupOnServer,
+  updateOwnProfileOnServer,
+  changeOwnPasswordOnServer,
+  getPendingUsersFromServer,
+  approveUserOnServer,
+  rejectUserOnServer,
   deleteUserOnServer,
   deleteCommentOnServer,
   deleteNavigationOnServer,
@@ -1045,6 +1051,36 @@ function registerIpcHandlers() {
     return { success: true }
   })
 
+  // Self-service signup (no auth required). Uses the current server URL.
+  ipcMain.handle('auth:signup', async (_event, payload) => {
+    try {
+      const result = await signupOnServer(payload)
+      return { success: true, result }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : String(error)
+      console.error('[Auth] Signup failed:', code)
+      return { success: false, code }
+    }
+  })
+
+  // Self-service: current user updates their own profile / password.
+  ipcMain.handle('me:updateProfile', async (_event, payload) => {
+    const user = requireAuthenticatedUser()
+    const updated = await updateOwnProfileOnServer(currentAuthToken, payload)
+    if (updated.id === user.id) {
+      saveAuthSession(updated)
+    }
+    return updated
+  })
+  ipcMain.handle('me:changePassword', async (_event, payload) => {
+    requireAuthenticatedUser()
+    return changeOwnPasswordOnServer(
+      currentAuthToken,
+      payload.currentPassword,
+      payload.newPassword,
+    )
+  })
+
   ipcMain.handle('sync:getState', () => {
     requireAuthenticatedUser()
     return {
@@ -1112,6 +1148,18 @@ function registerIpcHandlers() {
   ipcMain.handle('admin:getUserReferences', async (_event, userId) => {
     requireAdminUser()
     return getUserReferencesFromServer(currentAuthToken, userId)
+  })
+  ipcMain.handle('admin:getPendingUsers', async () => {
+    requireAdminUser()
+    return getPendingUsersFromServer(currentAuthToken)
+  })
+  ipcMain.handle('admin:approveUser', async (_event, userId) => {
+    requireAdminUser()
+    return approveUserOnServer(currentAuthToken, userId)
+  })
+  ipcMain.handle('admin:rejectUser', async (_event, userId) => {
+    requireAdminUser()
+    return rejectUserOnServer(currentAuthToken, userId)
   })
 
   const handleAuthenticated = (channel, listener) => {

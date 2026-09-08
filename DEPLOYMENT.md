@@ -1,4 +1,4 @@
-# 투자기획팀 업무관리 공간 1.3.1 배포 및 운영 안내
+# 투자기획팀 업무관리 공간 1.4.0 배포 및 운영 안내
 
 ## 1. 서버 PC 준비
 
@@ -64,10 +64,10 @@ http://192.168.0.10:4310
 생성된 파일:
 
 ```text
-apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.3.1.exe
-apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.3.1.exe.sha256.txt
-apps\desktop\release\투자기획팀 업무관리 공간-1.3.1-win-x64.zip
-apps\desktop\release\투자기획팀 업무관리 공간-1.3.1-win-x64.zip.sha256.txt
+apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.4.0.exe
+apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.4.0.exe.sha256.txt
+apps\desktop\release\투자기획팀 업무관리 공간-1.4.0-win-x64.zip
+apps\desktop\release\투자기획팀 업무관리 공간-1.4.0-win-x64.zip.sha256.txt
 ```
 
 일반 사용자는 Setup EXE를 실행해 설치합니다. 설치 권한이 제한된 PC에서는 ZIP을

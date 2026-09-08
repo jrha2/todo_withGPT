@@ -84,6 +84,7 @@ function toPublicUser(user) {
     phone: user.phone ?? '',
     role: user.role,
     isActive: Boolean(user.isActive),
+    status: user.status ?? 'active',
   }
 }
 
@@ -285,6 +286,7 @@ export function initializeDb() {
       password_hash TEXT NULL,
       role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
       is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'pending')),
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -542,6 +544,10 @@ export function initializeDb() {
     [
       'is_active',
       `ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))`,
+    ],
+    [
+      'status',
+      `ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'pending'))`,
     ],
   ]
 
@@ -839,7 +845,8 @@ function getUserAccountRow(userId) {
       phone,
       password_hash AS passwordHash,
       role,
-      is_active AS isActive
+      is_active AS isActive,
+      status
     FROM users
     WHERE id = ?
   `).get(userId)
@@ -921,15 +928,35 @@ export function getManagedUsers() {
       COALESCE(phone, '') AS phone,
       role,
       is_active AS isActive,
+      status,
       created_at AS createdAt
     FROM users
-    WHERE login_id IS NOT NULL
+    WHERE login_id IS NOT NULL AND status = 'active'
     ORDER BY
       CASE role WHEN 'admin' THEN 0 ELSE 1 END,
       name COLLATE NOCASE,
       created_at,
       id
   `).all().map(toPublicUser)
+}
+
+// Accounts awaiting admin approval (created via self-service signup).
+export function getPendingUsers() {
+  return getDb().prepare(`
+    SELECT
+      id,
+      COALESCE(login_id, '') AS loginId,
+      name,
+      email,
+      COALESCE(phone, '') AS phone,
+      role,
+      is_active AS isActive,
+      status,
+      created_at AS createdAt
+    FROM users
+    WHERE login_id IS NOT NULL AND status = 'pending'
+    ORDER BY created_at, id
+  `).all().map((row) => ({ ...toPublicUser(row), createdAt: row.createdAt }))
 }
 
 export function createManagedUser(input) {
@@ -959,6 +986,123 @@ export function createManagedUser(input) {
   }
 
   return toPublicUser(getUserAccountRow(userId))
+}
+
+// Self-service signup: creates a NON-admin account in the 'pending' state and
+// inactive, so existing auth checks (authenticateUser/getSessionUser) block
+// login until an admin approves it. Role is forced to 'user' regardless of input.
+export function createSignupRequest(input) {
+  const db = getDb()
+  const account = validateAccountInput({ ...input, role: 'user' }, true)
+  const userId = `user-${randomUUID()}`
+
+  try {
+    db.prepare(`
+      INSERT INTO users (
+        id, login_id, name, email, phone, password_hash, role, is_active, status
+      ) VALUES (?, ?, ?, ?, ?, ?, 'user', 0, 'pending')
+    `).run(
+      userId,
+      account.loginId,
+      account.name,
+      account.email,
+      account.phone,
+      hashPassword(account.password),
+    )
+  } catch (error) {
+    if (String(error?.message ?? '').includes('UNIQUE')) {
+      throw new Error('LOGIN_ID_OR_EMAIL_EXISTS')
+    }
+    throw error
+  }
+
+  return { id: userId, status: 'pending' }
+}
+
+// Admin approves a pending signup: activate it and move it to 'active'.
+export function approveUser(userId) {
+  const db = getDb()
+  const user = getUserAccountRow(userId)
+  if (!user) throw new Error('USER_NOT_FOUND')
+  if (user.status !== 'pending') throw new Error('USER_NOT_PENDING')
+
+  db.prepare(`
+    UPDATE users
+    SET is_active = 1, status = 'active', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(userId)
+
+  return toPublicUser(getUserAccountRow(userId))
+}
+
+// Admin rejects a pending signup: remove the not-yet-approved account. Only
+// pending accounts can be rejected this way (approved accounts use delete).
+export function rejectUser(userId) {
+  const db = getDb()
+  const user = getUserAccountRow(userId)
+  if (!user) throw new Error('USER_NOT_FOUND')
+  if (user.status !== 'pending') throw new Error('USER_NOT_PENDING')
+
+  db.prepare(`DELETE FROM users WHERE id = ?`).run(userId)
+  return { id: userId }
+}
+
+// Self-service profile update for the logged-in user. Only name/email may
+// change; loginId, role, isActive and status are intentionally left untouched.
+export function updateOwnProfile(userId, input) {
+  const db = getDb()
+  const current = getUserAccountRow(userId)
+  if (!current) throw new Error('USER_NOT_FOUND')
+
+  const name = String(input?.name ?? '').trim()
+  const email = String(input?.email ?? '').trim().toLowerCase()
+
+  if (!name) {
+    throw new Error('Assignee name is required')
+  }
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    throw new Error('A valid email is required')
+  }
+
+  try {
+    db.prepare(`
+      UPDATE users
+      SET name = ?, email = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(name, email, userId)
+  } catch (error) {
+    if (String(error?.message ?? '').includes('UNIQUE')) {
+      throw new Error('LOGIN_ID_OR_EMAIL_EXISTS')
+    }
+    throw error
+  }
+
+  return toPublicUser(getUserAccountRow(userId))
+}
+
+// Self-service password change: verifies the current password before applying
+// the new one (min length enforced by hashPassword).
+export function changeOwnPassword(userId, currentPassword, newPassword) {
+  const db = getDb()
+  const account = getUserAccountRow(userId)
+  if (!account) throw new Error('USER_NOT_FOUND')
+
+  if (!verifyPassword(String(currentPassword ?? ''), account.passwordHash)) {
+    throw new Error('CURRENT_PASSWORD_INCORRECT')
+  }
+
+  const next = String(newPassword ?? '')
+  if (next.length < 8) {
+    throw new Error('Password must be at least 8 characters')
+  }
+
+  db.prepare(`
+    UPDATE users
+    SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(hashPassword(next), userId)
+
+  return { id: userId }
 }
 
 export function updateManagedUser(actorUserId, userId, input) {
@@ -1047,25 +1191,15 @@ export function deleteManagedUser(actorUserId, userId) {
     }
   }
 
-  const references = {
-    ownedNodes: db.prepare(`SELECT COUNT(*) AS count FROM nav_nodes WHERE owner_user_id = ?`).get(userId).count,
-    assignedTasks: db.prepare(`SELECT COUNT(*) AS count FROM task_assignees WHERE user_id = ?`).get(userId).count,
-    legacyAssignedTasks: db.prepare(`SELECT COUNT(*) AS count FROM task_details WHERE assignee_user_id = ?`).get(userId).count,
-    assignedSubTasks: db.prepare(`SELECT COUNT(*) AS count FROM sub_tasks WHERE assignee_user_id = ?`).get(userId).count,
-    assignedSubTaskLinks: db.prepare(`SELECT COUNT(*) AS count FROM sub_task_assignees WHERE user_id = ?`).get(userId).count,
-    comments: db.prepare(`SELECT COUNT(*) AS count FROM comments WHERE author_user_id = ?`).get(userId).count,
-    attachments: db.prepare(`SELECT COUNT(*) AS count FROM attachments WHERE uploaded_by_user_id = ?`).get(userId).count,
-    memos:
-      db.prepare(`SELECT COUNT(*) AS count FROM memos WHERE author_user_id = ?`).get(userId).count +
-      db.prepare(`SELECT COUNT(*) AS count FROM task_details WHERE memo_author_user_id = ?`).get(userId).count,
-    reminderStates: db.prepare(`SELECT COUNT(*) AS count FROM reminder_user_states WHERE user_id = ?`).get(userId).count,
-    activityLogs: db.prepare(`SELECT COUNT(*) AS count FROM activity_logs WHERE actor_user_id = ?`).get(userId).count,
-  }
-  const referenceCount = Object.values(references).reduce(
-    (sum, count) => sum + count,
-    0,
-  )
-  if (referenceCount > 0) {
+  // Block deletion using the SAME criteria the admin UI shows via
+  // getManagedUserReferences. Previously this counted a broader/unfiltered set
+  // (including soft-deleted/trashed nav_nodes and assignee/reminder link tables
+  // the preview never surfaces), so a user with no *visible* related data could
+  // still be blocked — the admin saw "no related data" (Delete enabled) but the
+  // server rejected with USER_HAS_RELATED_DATA. Reusing the preview keeps the
+  // displayed state and the actual outcome in sync.
+  const references = getManagedUserReferences(userId)
+  if (references.hasRelatedData) {
     throw new Error('USER_HAS_RELATED_DATA')
   }
 

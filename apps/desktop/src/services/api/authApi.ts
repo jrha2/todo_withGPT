@@ -6,7 +6,18 @@ export type AuthUser = {
   phone: string
   role: 'admin' | 'user'
   isActive: boolean
+  status: 'active' | 'pending'
 }
+
+export type SignupInput = {
+  loginId: string
+  name: string
+  email: string
+  phone: string
+  password: string
+}
+
+export type PendingUser = AuthUser & { createdAt: string }
 
 export type ManagedUserInput = {
   loginId: string
@@ -82,6 +93,69 @@ export async function logout() {
   }
 
   return window.api.auth.logout()
+}
+
+export async function signup(input: SignupInput) {
+  if (!window.api?.auth?.signup) {
+    throw new Error('AUTH_API_UNAVAILABLE')
+  }
+
+  const result = (await window.api.auth.signup(input)) as {
+    success: boolean
+    result?: { id: string; status: string }
+    code?: string
+  }
+
+  if (!result.success) {
+    throw new Error(result.code || 'SIGNUP_FAILED')
+  }
+
+  return result.result
+}
+
+export async function updateOwnProfile(input: { name: string; email: string }) {
+  if (!window.api?.me?.updateProfile) {
+    throw new Error('AUTH_API_UNAVAILABLE')
+  }
+
+  return window.api.me.updateProfile(input) as Promise<AuthUser>
+}
+
+export async function changeOwnPassword(
+  currentPassword: string,
+  newPassword: string,
+) {
+  if (!window.api?.me?.changePassword) {
+    throw new Error('AUTH_API_UNAVAILABLE')
+  }
+
+  return window.api.me.changePassword(currentPassword, newPassword) as Promise<{
+    id: string
+  }>
+}
+
+export async function getPendingUsers() {
+  if (!window.api?.admin?.getPendingUsers) {
+    throw new Error('ADMIN_API_UNAVAILABLE')
+  }
+
+  return window.api.admin.getPendingUsers() as Promise<PendingUser[]>
+}
+
+export async function approvePendingUser(userId: string) {
+  if (!window.api?.admin?.approveUser) {
+    throw new Error('ADMIN_API_UNAVAILABLE')
+  }
+
+  return window.api.admin.approveUser(userId) as Promise<AuthUser>
+}
+
+export async function rejectPendingUser(userId: string) {
+  if (!window.api?.admin?.rejectUser) {
+    throw new Error('ADMIN_API_UNAVAILABLE')
+  }
+
+  return window.api.admin.rejectUser(userId) as Promise<{ id: string }>
 }
 
 export async function getManagedUsers() {

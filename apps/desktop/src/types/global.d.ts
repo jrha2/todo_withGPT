@@ -45,6 +45,14 @@ declare global {
         getSession: () => Promise<unknown>
         login: (loginId: string, password: string) => Promise<unknown>
         logout: () => Promise<unknown>
+        signup: (input: unknown) => Promise<unknown>
+      }
+      me: {
+        updateProfile: (input: { name: string; email: string }) => Promise<unknown>
+        changePassword: (
+          currentPassword: string,
+          newPassword: string,
+        ) => Promise<unknown>
       }
       admin: {
         getUsers: () => Promise<unknown>
@@ -52,6 +60,9 @@ declare global {
         updateUser: (userId: string, changes: unknown) => Promise<unknown>
         deleteUser: (userId: string) => Promise<unknown>
         getUserReferences: (userId: string) => Promise<unknown>
+        getPendingUsers: () => Promise<unknown>
+        approveUser: (userId: string) => Promise<unknown>
+        rejectUser: (userId: string) => Promise<unknown>
       }
       zoom: {
         min: number

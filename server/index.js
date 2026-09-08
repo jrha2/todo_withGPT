@@ -22,6 +22,12 @@ import {
   deleteMemo,
   dismissReminderForUser,
   dropNavigationNode,
+  approveUser,
+  changeOwnPassword,
+  createSignupRequest,
+  getPendingUsers,
+  rejectUser,
+  updateOwnProfile,
   getAssigneeUsers,
   getAttachmentRecord,
   getComments,
@@ -65,7 +71,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.3.1'
+const serverVersion = '1.4.0'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -659,12 +665,14 @@ function getErrorStatus(code) {
   if (
     code === 'LOGIN_ID_OR_EMAIL_EXISTS' ||
     code === 'USER_HAS_RELATED_DATA' ||
+    code === 'USER_NOT_PENDING' ||
     code === 'SYNC_CONFLICT' ||
     code === 'CLIENT_UPDATE_REQUIRED'
   ) return 409
   if (
     code === 'INVALID_JSON' ||
     code === 'REQUEST_TOO_LARGE' ||
+    code === 'CURRENT_PASSWORD_INCORRECT' ||
     code.includes('required') ||
     code.includes('must be') ||
     code.startsWith('ADMIN_CANNOT') ||
@@ -792,6 +800,14 @@ async function handleRequest(request, response) {
     return
   }
 
+  // Self-service signup request. Creates a pending (inactive) account that
+  // cannot log in until an admin approves it. Unauthenticated by design.
+  if (method === 'POST' && pathname === '/api/auth/signup') {
+    const body = await readJson(request)
+    sendJson(response, 201, { result: createSignupRequest(body) })
+    return
+  }
+
   if (method === 'GET' && pathname === '/api/auth/session') {
     const session = requireSession(request)
     sendJson(response, 200, { user: session.user })
@@ -802,6 +818,28 @@ async function handleRequest(request, response) {
     const session = requireSession(request)
     getDb().prepare(`DELETE FROM auth_sessions WHERE id = ?`).run(session.sessionId)
     sendJson(response, 200, { success: true })
+    return
+  }
+
+  // Self-service: the logged-in user edits their own name/email.
+  if (method === 'PUT' && pathname === '/api/me/profile') {
+    const session = requireSession(request)
+    const body = await readJson(request)
+    sendJson(response, 200, { user: updateOwnProfile(session.user.id, body) })
+    return
+  }
+
+  // Self-service: the logged-in user changes their own password.
+  if (method === 'POST' && pathname === '/api/me/password') {
+    const session = requireSession(request)
+    const body = await readJson(request)
+    sendJson(response, 200, {
+      result: changeOwnPassword(
+        session.user.id,
+        body.currentPassword,
+        body.newPassword,
+      ),
+    })
     return
   }
 
@@ -1292,6 +1330,35 @@ async function handleRequest(request, response) {
     requireAdmin(request)
     const body = await readJson(request)
     sendJson(response, 201, { user: createManagedUser(body) })
+    return
+  }
+
+  // Pending signup requests awaiting approval. Declared before the generic
+  // /api/admin/users/:id matchers so "pending"/"approve"/"reject" are not
+  // treated as a user id.
+  if (method === 'GET' && pathname === '/api/admin/users/pending') {
+    requireAdmin(request)
+    sendJson(response, 200, { users: getPendingUsers() })
+    return
+  }
+
+  const adminApproveMatch = pathname.match(
+    /^\/api\/admin\/users\/([^/]+)\/approve$/,
+  )
+  if (method === 'POST' && adminApproveMatch) {
+    requireAdmin(request)
+    const userId = decodeURIComponent(adminApproveMatch[1])
+    sendJson(response, 200, { user: approveUser(userId) })
+    return
+  }
+
+  const adminRejectMatch = pathname.match(
+    /^\/api\/admin\/users\/([^/]+)\/reject$/,
+  )
+  if (method === 'POST' && adminRejectMatch) {
+    requireAdmin(request)
+    const userId = decodeURIComponent(adminRejectMatch[1])
+    sendJson(response, 200, { result: rejectUser(userId) })
     return
   }
 
