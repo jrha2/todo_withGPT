@@ -71,7 +71,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.4.0'
+const serverVersion = '1.4.1'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -697,6 +697,7 @@ function getErrorStatus(code) {
     return 400
   }
   if (code === 'ATTACHMENT_TOO_LARGE') return 413
+  if (code === 'USER_DELETE_FAILED') return 500
   return 500
 }
 

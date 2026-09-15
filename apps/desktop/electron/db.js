@@ -1191,20 +1191,96 @@ export function deleteManagedUser(actorUserId, userId) {
     }
   }
 
-  // Block deletion using the SAME criteria the admin UI shows via
-  // getManagedUserReferences. Previously this counted a broader/unfiltered set
-  // (including soft-deleted/trashed nav_nodes and assignee/reminder link tables
-  // the preview never surfaces), so a user with no *visible* related data could
-  // still be blocked — the admin saw "no related data" (Delete enabled) but the
-  // server rejected with USER_HAS_RELATED_DATA. Reusing the preview keeps the
-  // displayed state and the actual outcome in sync.
+  // Active (non-trashed) references must be reassigned by the admin first; these
+  // are exactly what the preview shows, so the disabled/enabled Delete button
+  // matches the outcome.
   const references = getManagedUserReferences(userId)
   if (references.hasRelatedData) {
     throw new Error('USER_HAS_RELATED_DATA')
   }
 
-  db.prepare(`DELETE FROM users WHERE id = ?`).run(userId)
+  // References that live only on trashed tasks would still violate NO-ACTION
+  // foreign keys on a hard DELETE. Reassign every such NO-ACTION reference to
+  // the acting admin inside the delete transaction so the delete is atomic and
+  // never fails with a raw foreign-key error. CASCADE/SET NULL references
+  // (auth_sessions, task_assignees, sub_task_assignees, reminder_user_states,
+  // user_task_state, activity_logs) are handled by the schema automatically.
+  const runDelete = db.transaction(() => {
+    // nav_nodes.owner_user_id is NOT NULL → reassign ownership.
+    db.prepare(`UPDATE nav_nodes SET owner_user_id = ? WHERE owner_user_id = ?`)
+      .run(actorUserId, userId)
+    db.prepare(`UPDATE task_details SET assignee_user_id = ? WHERE assignee_user_id = ?`)
+      .run(actorUserId, userId)
+    db.prepare(`UPDATE task_details SET memo_author_user_id = ? WHERE memo_author_user_id = ?`)
+      .run(actorUserId, userId)
+    db.prepare(`UPDATE sub_tasks SET assignee_user_id = ? WHERE assignee_user_id = ?`)
+      .run(actorUserId, userId)
+    db.prepare(`UPDATE memos SET author_user_id = ? WHERE author_user_id = ?`)
+      .run(actorUserId, userId)
+    db.prepare(`UPDATE comments SET author_user_id = ? WHERE author_user_id = ?`)
+      .run(actorUserId, userId)
+    db.prepare(`UPDATE attachments SET uploaded_by_user_id = ? WHERE uploaded_by_user_id = ?`)
+      .run(actorUserId, userId)
+
+    db.prepare(`DELETE FROM users WHERE id = ?`).run(userId)
+  })
+
+  try {
+    runDelete()
+  } catch (error) {
+    console.error('[DB] Failed to delete managed user:', error)
+    throw new Error('USER_DELETE_FAILED')
+  }
+
   return { id: userId }
+}
+
+// Build "폴더 > 폴더" path for a nav node using its ancestor chain (excluding
+// the node itself). Returns '' for a root-level node.
+function getNavNodePath(db, nodeId) {
+  const rows = db.prepare(`
+    WITH RECURSIVE ancestors(id, parent_id, title, depth) AS (
+      SELECT id, parent_id, title, 0 FROM nav_nodes WHERE id = ?
+      UNION ALL
+      SELECT parent.id, parent.parent_id, parent.title, child.depth + 1
+      FROM nav_nodes AS parent
+      JOIN ancestors AS child ON child.parent_id = parent.id
+    )
+    SELECT title FROM ancestors WHERE depth > 0 ORDER BY depth DESC
+  `).all(nodeId)
+  return rows.map((row) => row.title).join(' > ')
+}
+
+// Count NO-ACTION user references that would violate a foreign key on a hard
+// DELETE but which the *active* references preview does not surface (i.e. they
+// live on trashed/soft-deleted tasks). Used only to inform the admin.
+function countTrashedUserReferences(db, userId) {
+  return db.prepare(`
+    SELECT (
+      (SELECT COUNT(*) FROM nav_nodes
+        WHERE owner_user_id = @userId AND deleted_at IS NOT NULL)
+      + (SELECT COUNT(*) FROM task_details AS detail
+          JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+          WHERE (detail.assignee_user_id = @userId OR detail.memo_author_user_id = @userId)
+            AND nav_node.deleted_at IS NOT NULL)
+      + (SELECT COUNT(*) FROM sub_tasks AS sub_task
+          JOIN task_details AS detail ON detail.id = sub_task.task_detail_id
+          JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+          WHERE sub_task.assignee_user_id = @userId AND nav_node.deleted_at IS NOT NULL)
+      + (SELECT COUNT(*) FROM comments AS comment
+          JOIN task_details AS detail ON detail.id = comment.task_detail_id
+          JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+          WHERE comment.author_user_id = @userId AND nav_node.deleted_at IS NOT NULL)
+      + (SELECT COUNT(*) FROM memos AS memo
+          JOIN task_details AS detail ON detail.id = memo.task_detail_id
+          JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+          WHERE memo.author_user_id = @userId AND nav_node.deleted_at IS NOT NULL)
+      + (SELECT COUNT(*) FROM attachments AS attachment
+          JOIN task_details AS detail ON detail.id = attachment.task_detail_id
+          JOIN nav_nodes AS nav_node ON nav_node.id = detail.nav_node_id
+          WHERE attachment.uploaded_by_user_id = @userId AND nav_node.deleted_at IS NOT NULL)
+    ) AS count
+  `).get({ userId }).count
 }
 
 export function getManagedUserReferences(userId) {
@@ -1212,6 +1288,10 @@ export function getManagedUserReferences(userId) {
   const user = getUserAccountRow(userId)
   if (!user) throw new Error('USER_NOT_FOUND')
 
+  // Only ACTIVE (non-trashed) references block deletion and are shown as items
+  // the admin must reassign first. References that live solely on trashed tasks
+  // are cleaned up automatically at delete time, so they are reported separately
+  // (trashedReferenceCount) rather than blocking.
   const taskRows = db.prepare(`
     SELECT DISTINCT taskId, taskTitle, relation FROM (
       SELECT nav_node.id AS taskId, nav_node.title AS taskTitle, '업무 작성자' AS relation
@@ -1268,6 +1348,7 @@ export function getManagedUserReferences(userId) {
     const item = taskMap.get(row.taskId) || {
       taskId: row.taskId,
       title: row.taskTitle,
+      path: getNavNodePath(db, row.taskId),
       relations: [],
     }
     if (!item.relations.includes(row.relation)) item.relations.push(row.relation)
@@ -1279,17 +1360,27 @@ export function getManagedUserReferences(userId) {
     FROM nav_nodes
     WHERE owner_user_id = ? AND node_type = 'folder' AND deleted_at IS NULL
     ORDER BY title COLLATE NOCASE
-  `).all(userId)
+  `).all(userId).map((folder) => ({
+    ...folder,
+    path: getNavNodePath(db, folder.id),
+  }))
+
   const activityCount = db.prepare(`
     SELECT COUNT(*) AS count FROM activity_logs WHERE actor_user_id = ?
   `).get(userId).count
 
+  const trashedReferenceCount = countTrashedUserReferences(db, userId)
+
+  // hasRelatedData reflects only what actually blocks deletion: active tasks or
+  // owned active folders that must be reassigned first. Activity logs (SET NULL
+  // on delete) and trashed-only references (cleaned up on delete) do NOT block.
   return {
     user: toPublicUser(user),
     tasks: Array.from(taskMap.values()),
     folders,
     activityCount,
-    hasRelatedData: taskMap.size > 0 || folders.length > 0 || activityCount > 0,
+    trashedReferenceCount,
+    hasRelatedData: taskMap.size > 0 || folders.length > 0,
   }
 }
 

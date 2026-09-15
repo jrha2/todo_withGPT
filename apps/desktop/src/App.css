@@ -5300,6 +5300,14 @@ body.is-resizing-navigation * {
 .admin-reference-list > div { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid #e2ebed; }
 .admin-reference-list span { color: #35565d; font-weight: 700; }
 .admin-reference-list small { color: #789096; }
+.admin-reference-note {
+  margin-top: 9px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #eef5ee;
+  color: #3d6b47;
+  font-size: 12px;
+}
 
 .memo-empty-state span {
   color: #8ca0a4;

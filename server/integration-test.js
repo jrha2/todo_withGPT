@@ -474,6 +474,68 @@ try {
   if (managedUsersAfterDelete.some((user) => user.id === disposableUser.id)) {
     throw new Error('Unused user deletion failed')
   }
+
+  // A user whose only remaining references live on a TRASHED task must still be
+  // deletable: the preview reports no blocking data (hasRelatedData=false) but
+  // flags the trashed references, and the delete cleans them up without hitting
+  // a foreign-key violation.
+  const trashedRefUser = (
+    await request('/api/admin/users', {
+      method: 'POST',
+      token,
+      body: {
+        loginId: 'trash.ref',
+        name: 'Trash Ref',
+        email: 'trash.ref@example.com',
+        phone: '',
+        password: 'Trash1234!',
+        role: 'user',
+      },
+    })
+  ).user
+  const trashedRefLogin = await request('/api/auth/login', {
+    method: 'POST',
+    body: { loginId: 'trash.ref', password: 'Trash1234!' },
+  })
+  const trashTask = (
+    await request('/api/navigation/tasks', {
+      method: 'POST',
+      token,
+      body: { title: '휴지통 이동 예정 Task', parentId: null },
+    })
+  ).task
+  // The user authors a comment on the task, creating a NO-ACTION FK reference.
+  await request(`/api/tasks/${encodeURIComponent(trashTask.id)}/comments`, {
+    method: 'POST',
+    token: trashedRefLogin.token,
+    body: { parentId: null, content: '휴지통 참조 확인용 댓글' },
+  })
+  // Move the task to the trash (soft delete).
+  await request(`/api/navigation/nodes/${encodeURIComponent(trashTask.id)}`, {
+    method: 'DELETE',
+    token,
+  })
+
+  const trashedRefReferences = (
+    await request(`/api/admin/users/${encodeURIComponent(trashedRefUser.id)}/references`, { token })
+  ).references
+  if (trashedRefReferences.hasRelatedData) {
+    throw new Error('Trashed-only references should not block deletion')
+  }
+  if (!(trashedRefReferences.trashedReferenceCount > 0)) {
+    throw new Error('Trashed reference count was not reported')
+  }
+
+  await request(`/api/admin/users/${encodeURIComponent(trashedRefUser.id)}`, {
+    method: 'DELETE',
+    token,
+  })
+  const managedUsersAfterTrashedDelete = (
+    await request('/api/admin/users', { token })
+  ).users
+  if (managedUsersAfterTrashedDelete.some((user) => user.id === trashedRefUser.id)) {
+    throw new Error('User with trashed-only references could not be deleted')
+  }
   const legacyUpdate = (
     await request(`/api/tasks/${encodeURIComponent(taskId)}`, {
       method: 'PUT',

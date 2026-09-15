@@ -31,9 +31,10 @@ export type ManagedUserInput = {
 
 export type ManagedUserReferences = {
   user: AuthUser
-  tasks: Array<{ taskId: string; title: string; relations: string[] }>
-  folders: Array<{ id: string; title: string }>
+  tasks: Array<{ taskId: string; title: string; path: string; relations: string[] }>
+  folders: Array<{ id: string; title: string; path: string }>
   activityCount: number
+  trashedReferenceCount: number
   hasRelatedData: boolean
 }
 

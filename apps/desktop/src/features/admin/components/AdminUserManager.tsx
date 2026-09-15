@@ -58,6 +58,29 @@ function getErrorMessage(error: unknown) {
   return '사용자 정보를 저장하지 못했습니다. 입력 내용을 확인해 주세요.'
 }
 
+// Delete-specific error messages. Deletion failures must not show the save
+// fallback ("사용자 정보를 저장하지 못했습니다").
+function getDeleteErrorMessage(error: unknown) {
+  const message = String(error instanceof Error ? error.message : error)
+
+  if (message.includes('USER_HAS_RELATED_DATA')) {
+    return '이 사용자가 담당하거나 작성한 진행 중 업무가 남아 있어 삭제할 수 없습니다. 아래 업무의 담당자·작성자를 다른 사용자로 옮긴 뒤 다시 시도해 주세요.'
+  }
+  if (message.includes('ADMIN_CANNOT_DELETE_SELF')) {
+    return '현재 로그인한 관리자 계정은 삭제할 수 없습니다.'
+  }
+  if (message.includes('LAST_ADMIN_REQUIRED')) {
+    return '활성 관리자 계정은 최소 한 개가 필요합니다.'
+  }
+  if (message.includes('USER_DELETE_FAILED')) {
+    return '계정을 삭제하는 중 오류가 발생했습니다. 남아 있는 연결 데이터를 확인한 뒤 다시 시도해 주세요.'
+  }
+  if (message.includes('SERVER_UNAVAILABLE')) {
+    return '서버에 연결할 수 없습니다. 서버 상태를 확인해 주세요.'
+  }
+  return `계정을 삭제하지 못했습니다. (${message})`
+}
+
 function AdminUserManager({
   currentUser,
   onClose,
@@ -221,7 +244,7 @@ function AdminUserManager({
       onUsersChanged()
     } catch (error) {
       console.error('Failed to delete managed user:', error)
-      setDeleteErrorMessage(getErrorMessage(error))
+      setDeleteErrorMessage(getDeleteErrorMessage(error))
     } finally {
       setIsDeleting(false)
     }
@@ -429,7 +452,7 @@ function AdminUserManager({
               <div className="confirm-modal-body">
                 “{deleteTarget.name}” 사용자를 정말 삭제하시겠습니까?
                 <br />
-                작성하거나 담당하는 기존 데이터가 있으면 삭제되지 않습니다.
+                진행 중 업무의 담당자·작성자로 남아 있으면 삭제할 수 없습니다. 아래 목록을 먼저 정리해 주세요.
                 {isLoadingReferences && (
                   <div className="admin-reference-loading">연결된 업무를 확인하고 있습니다…</div>
                 )}
@@ -438,20 +461,34 @@ function AdminUserManager({
                     <strong>삭제 전에 정리해야 할 업무</strong>
                     {deleteReferences.tasks.map((task) => (
                       <div key={task.taskId}>
-                        <span>{task.title}</span>
+                        <span>{task.path ? `${task.path} > ${task.title}` : task.title}</span>
                         <small>{task.relations.join(' · ')}</small>
                       </div>
                     ))}
                   </div>
                 )}
                 {deleteReferences && deleteReferences.folders.length > 0 && (
-                  <div className="admin-reference-summary">
-                    소유 폴더 {deleteReferences.folders.length}개
+                  <div className="admin-reference-list">
+                    <strong>정리해야 할 소유 폴더</strong>
+                    {deleteReferences.folders.map((folder) => (
+                      <div key={folder.id}>
+                        <span>{folder.path ? `${folder.path} > ${folder.title}` : folder.title}</span>
+                        <small>폴더 소유자</small>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {deleteReferences
+                  && !deleteReferences.hasRelatedData
+                  && deleteReferences.trashedReferenceCount > 0 && (
+                  <div className="admin-reference-note">
+                    휴지통에 있는 업무에 남은 연결 {deleteReferences.trashedReferenceCount}건은
+                    삭제 시 자동으로 정리됩니다.
                   </div>
                 )}
                 {deleteReferences && deleteReferences.activityCount > 0 && (
                   <div className="admin-reference-summary">
-                    변경 기록 {deleteReferences.activityCount}건
+                    변경 기록 {deleteReferences.activityCount}건 (삭제해도 기록은 보존되며 작성자만 해제됩니다)
                   </div>
                 )}
                 {deleteErrorMessage && (
