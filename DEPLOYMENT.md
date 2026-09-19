@@ -1,4 +1,4 @@
-# 투자기획팀 업무관리 공간 1.5.0 배포 및 운영 안내
+# 투자기획팀 업무관리 공간 1.5.1 배포 및 운영 안내
 
 ## 1. 서버 PC 준비
 
@@ -64,10 +64,10 @@ http://192.168.0.10:4310
 생성된 파일:
 
 ```text
-apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.5.0.exe
-apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.5.0.exe.sha256.txt
-apps\desktop\release\투자기획팀 업무관리 공간-1.5.0-win-x64.zip
-apps\desktop\release\투자기획팀 업무관리 공간-1.5.0-win-x64.zip.sha256.txt
+apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.5.1.exe
+apps\desktop\release\투자기획팀 업무관리 공간-설치파일-1.5.1.exe.sha256.txt
+apps\desktop\release\투자기획팀 업무관리 공간-1.5.1-win-x64.zip
+apps\desktop\release\투자기획팀 업무관리 공간-1.5.1-win-x64.zip.sha256.txt
 ```
 
 일반 사용자는 Setup EXE를 실행해 설치합니다. 설치 권한이 제한된 PC에서는 ZIP을
@@ -105,6 +105,29 @@ npm run dist:win
 3. 새 소스에서 `npm ci`, `npm run lint`, `npm run build`, `npm run test:server`를 실행합니다.
 4. 서버를 다시 시작하고 `/health`의 버전을 확인합니다.
 5. 새 포터블 ZIP을 사용자에게 배포합니다.
+
+### 6-1. 업데이트 안내 문구 / 강제 업데이트 (서버에서 제어)
+
+클라이언트의 업데이트 팝업 문구와 "강제 업데이트" 여부를 서버에서 파일 하나로 제어할 수 있습니다.
+`updates/` 폴더(`TODO_UPDATES_PATH`)에 **`update-policy.json`** 을 두면 서버 재시작 없이 즉시 반영됩니다.
+(형식 예시는 `server/update-policy.example.json` 참고. `updates/`는 gitignore 대상이라 저장소에 커밋되지 않습니다.)
+
+```json
+{
+  "message": "업데이트 팝업 상단 문구 (비우면 기본 문구)",
+  "detail": "업데이트 팝업 상세 문구 (비우면 기본 문구)",
+  "minVersion": "1.5.1",
+  "forced": false
+}
+```
+
+- `message` / `detail`: 업데이트 팝업에 표시할 문구. 비우면 기본 문구가 쓰입니다.
+- **강제 업데이트 판정**: `forced` 가 `true` 이거나, 실행 중인 앱 버전이 `minVersion` 보다 낮으면
+  해당 업데이트를 **필수**로 취급합니다.
+  - 필수일 때: 팝업에서 "나중에" 버튼이 사라지고, 다운로드가 끝나면 앱이 **자동으로 재시작·설치**됩니다.
+- 클라이언트는 업데이트 확인 시 `GET /api/update-policy` 로 이 정책을 읽습니다(미인증 접근 허용).
+- 강제 업데이트를 끝내면 `forced` 를 `false` 로 되돌리거나 `minVersion` 을 낮춰, 이후 배포가
+  불필요하게 강제되지 않게 합니다.
 
 ## 7. 복구 절차
 

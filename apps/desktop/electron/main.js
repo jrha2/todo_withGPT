@@ -51,6 +51,7 @@ import {
   getWorkspaceTasksFromServer,
   getServerSession,
   getSyncStateFromServer,
+  getUpdatePolicyFromServer,
   getServerUrl,
   getSubTasksFromServer,
   getTaskFromServer,
@@ -145,6 +146,33 @@ setSyncRequestContext(syncClientId, 0)
 let updatePromptOpen = false
 let updateDownloadStarted = false
 let updateCheckRunning = false
+// Set when the pending update is mandatory (per server policy). Used so the
+// downloaded handler can auto-install without letting the user defer.
+let updateIsMandatory = false
+
+// Compare dotted numeric versions (ignores pre-release suffix). Returns
+// -1 if a<b, 0 if equal, 1 if a>b.
+function compareVersions(a, b) {
+  const pa = String(a).split('-')[0].split('.').map((n) => Number(n) || 0)
+  const pb = String(b).split('-')[0].split('.').map((n) => Number(n) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0)
+    if (diff !== 0) return diff < 0 ? -1 : 1
+  }
+  return 0
+}
+
+// Decide whether the update is mandatory given the server policy and the
+// current app version. Mandatory when policy.forced is true, or the current
+// version is below policy.minVersion.
+function isUpdateMandatory(policy, currentVersion) {
+  if (!policy) return false
+  if (policy.forced === true) return true
+  if (policy.minVersion) {
+    return compareVersions(currentVersion, policy.minVersion) < 0
+  }
+  return false
+}
 
 function getUpdateFeedUrl() {
   return `${getServerUrl().replace(/\/$/, '')}/updates`
@@ -191,19 +219,35 @@ function configureAutoUpdater() {
     if (updatePromptOpen || updateDownloadStarted) return
     updatePromptOpen = true
 
+    // Fetch the server-managed policy: custom prompt text + mandatory flag.
+    const policy = await getUpdatePolicyFromServer()
+    updateIsMandatory = isUpdateMandatory(policy, app.getVersion())
+
+    const message = policy?.message
+      ? policy.message
+      : `새 버전 ${info.version}이 준비되었습니다.`
+    const detail = policy?.detail
+      ? policy.detail
+      : updateIsMandatory
+        ? '필수 업데이트입니다. 지금 업데이트하면 완료 후 앱이 재시작되어 자동으로 설치됩니다.'
+        : '지금 다운로드하면 완료 후 앱을 재시작하여 자동으로 설치할 수 있습니다.'
+
+    // Mandatory updates omit the "나중에" (defer) button.
+    const buttons = updateIsMandatory ? ['지금 업데이트'] : ['지금 업데이트', '나중에']
+
     const result = await dialog.showMessageBox(mainWindow || undefined, {
       type: 'info',
-      title: '새 버전 업데이트',
-      message: `새 버전 ${info.version}이 준비되었습니다.`,
-      detail: '지금 다운로드하면 완료 후 앱을 재시작하여 자동으로 설치할 수 있습니다.',
-      buttons: ['지금 업데이트', '나중에'],
+      title: updateIsMandatory ? '필수 업데이트' : '새 버전 업데이트',
+      message,
+      detail,
+      buttons,
       defaultId: 0,
-      cancelId: 1,
+      cancelId: updateIsMandatory ? 0 : 1,
       noLink: true,
     })
 
     updatePromptOpen = false
-    if (result.response !== 0) return
+    if (!updateIsMandatory && result.response !== 0) return
 
     updateDownloadStarted = true
     try {
@@ -231,6 +275,23 @@ function configureAutoUpdater() {
     updateDownloadStarted = false
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setProgressBar(-1)
+    }
+
+    // Mandatory update: install immediately (restart now) with a single button,
+    // so the user cannot keep running the outdated version.
+    if (updateIsMandatory) {
+      await dialog.showMessageBox(mainWindow || undefined, {
+        type: 'info',
+        title: '필수 업데이트 설치',
+        message: `버전 ${info.version} 다운로드가 완료되었습니다.`,
+        detail: '필수 업데이트를 적용하기 위해 앱을 재시작합니다.',
+        buttons: ['지금 재시작'],
+        defaultId: 0,
+        noLink: true,
+      })
+      isQuitting = true
+      autoUpdater.quitAndInstall(false, true)
+      return
     }
 
     const result = await dialog.showMessageBox(mainWindow || undefined, {

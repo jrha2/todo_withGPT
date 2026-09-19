@@ -91,6 +91,18 @@ export async function getSyncStateFromServer(token) {
   return Number(data.revision) || 0
 }
 
+// Server-managed update policy (custom prompt text + mandatory-update flag).
+// Best-effort: returns null on any failure so update flow falls back to defaults.
+export async function getUpdatePolicyFromServer() {
+  try {
+    const data = await request('/api/update-policy', {})
+    return data.policy ?? null
+  } catch (error) {
+    console.error('[Update] Failed to load update policy:', error)
+    return null
+  }
+}
+
 export async function streamSyncEventsFromServer(
   token,
   clientId,

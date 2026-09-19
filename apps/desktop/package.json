@@ -4,7 +4,7 @@
   "description": "팀 업무와 알림을 관리하는 데스크톱 To Do 앱",
   "author": "jrha2",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.5.1",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {

@@ -71,7 +71,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.5.0'
+const serverVersion = '1.5.1'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -419,6 +419,35 @@ function broadcastSyncEvent(event) {
   })
 }
 
+// Reads the server-managed update policy from updates/update-policy.json.
+// Shape: { message?, detail?, minVersion?, forced? }. The client uses `message`
+// / `detail` for the update prompt text, and treats the update as mandatory
+// when `forced` is true OR the client version is below `minVersion`.
+async function readUpdatePolicy() {
+  const defaults = {
+    message: '',
+    detail: '',
+    minVersion: '',
+    forced: false,
+  }
+  try {
+    const raw = await readFile(
+      path.join(updatesDirectory, 'update-policy.json'),
+      'utf8',
+    )
+    const parsed = JSON.parse(raw)
+    return {
+      message: typeof parsed.message === 'string' ? parsed.message : '',
+      detail: typeof parsed.detail === 'string' ? parsed.detail : '',
+      minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '',
+      forced: parsed.forced === true,
+    }
+  } catch {
+    // No policy file (or invalid) -> defaults (optional prompt, no custom text).
+    return defaults
+  }
+}
+
 async function broadcastPublishedUpdate(metadataFileName) {
   try {
     const metadata = await readFile(
@@ -735,6 +764,14 @@ async function handleRequest(request, response) {
       version: serverVersion,
       serverTime: new Date().toISOString(),
     })
+    return
+  }
+
+  // Update policy for the client's update prompt. Unauthenticated so the client
+  // can read it around login time. Values come from updates/update-policy.json
+  // (editable on the server without a restart); missing/invalid file -> defaults.
+  if (method === 'GET' && pathname === '/api/update-policy') {
+    sendJson(response, 200, { policy: await readUpdatePolicy() })
     return
   }
 
