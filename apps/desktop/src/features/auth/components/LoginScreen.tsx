@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   getAuthServerUrl,
+  getServerMigrationNotice,
   login,
   setAuthServerUrl,
   signup,
@@ -56,11 +57,15 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
   const [signupPhone, setSignupPhone] = useState('')
   const [signupPassword, setSignupPassword] = useState('')
   const [signupDone, setSignupDone] = useState(false)
+  const [migrationNotice, setMigrationNotice] = useState<{ from: string; to: string } | null>(null)
 
   useEffect(() => {
     getAuthServerUrl().then(setServerUrl).catch((error) => {
       console.error('Failed to load server URL:', error)
     })
+    getServerMigrationNotice()
+      .then((notice) => { if (notice) setMigrationNotice(notice) })
+      .catch(() => { /* notice is best-effort */ })
   }, [])
 
   const switchMode = (next: 'login' | 'signup') => {
@@ -123,7 +128,7 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
       <section className="login-card">
         <div className="login-brand-mark">✓</div>
         <div className="login-heading">
-          <span>투자기획팀 업무관리 공간 · VERSION 1.4.1</span>
+          <span>투자기획팀 업무관리 공간 · VERSION 1.5.0</span>
           <h1>{mode === 'login' ? '다시 만나서 반가워요' : '계정 가입 신청'}</h1>
           <p>
             {mode === 'login'
@@ -131,6 +136,14 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
               : '가입 신청 후 관리자 승인이 완료되면 로그인할 수 있습니다.'}
           </p>
         </div>
+
+        {migrationNotice && (
+          <div className="login-migration-notice" role="status">
+            <strong>서버 주소가 새 주소로 자동 변경되었습니다.</strong>
+            <span>새 서버로 다시 로그인해 주세요.</span>
+            <small>{migrationNotice.to}</small>
+          </div>
+        )}
 
         <div className="login-mode-tabs" role="tablist" aria-label="로그인 또는 가입">
           <button

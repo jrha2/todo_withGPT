@@ -112,6 +112,17 @@ let saveBoundsTimer = null
 let currentUser = null
 let currentAuthToken = null
 let syncAbortController = null
+
+// One-time server relocation (old on-prem server -> new Tailscale HTTPS server).
+// On startup, if the saved server address matches an OLD address, it is replaced
+// with SERVER_MIGRATION.to and the saved session token is dropped so the user
+// re-logs in against the new server. Env override (TODO_SERVER_URL) is respected
+// and takes precedence, so this only affects clients that stored an old address.
+const SERVER_MIGRATION = {
+  from: ['http://130.1.14.61:4310', 'http://127.0.0.1:4310'],
+  to: 'https://home-desktop.tailf5d646.ts.net:10000',
+}
+let serverMigrationNotice = null
 let pendingSyncEvent = null
 let latestServerRevision = 0
 let syncStatus = {
@@ -399,6 +410,25 @@ function getAuthSessionPath() {
 async function restoreAuthSession() {
   try {
     const saved = JSON.parse(readFileSync(getAuthSessionPath(), 'utf8'))
+
+    // Server relocation: if the stored address is a known OLD address, switch to
+    // the NEW address, drop the old-server session token (invalid on the new
+    // server), persist the new address, and force a re-login. Env override wins.
+    const savedUrl = String(saved?.serverUrl ?? '').replace(/\/$/, '')
+    if (
+      !process.env.TODO_SERVER_URL &&
+      savedUrl &&
+      SERVER_MIGRATION.from.includes(savedUrl)
+    ) {
+      setServerUrl(SERVER_MIGRATION.to)
+      serverMigrationNotice = { from: savedUrl, to: SERVER_MIGRATION.to }
+      currentUser = null
+      currentAuthToken = null
+      // Persist the new address (without a token) so future starts use it.
+      saveAuthSession(null)
+      return null
+    }
+
     if (!process.env.TODO_SERVER_URL && saved?.serverUrl) {
       setServerUrl(saved.serverUrl)
     }
@@ -996,6 +1026,13 @@ async function checkDueReminders() {
 
 function registerIpcHandlers() {
   ipcMain.handle('auth:getServerUrl', () => getServerUrl())
+  // One-time server-relocation notice; cleared after the renderer reads it so
+  // the banner shows only once after the automatic switch.
+  ipcMain.handle('auth:getServerMigrationNotice', () => {
+    const notice = serverMigrationNotice
+    serverMigrationNotice = null
+    return notice
+  })
   ipcMain.handle('auth:setServerUrl', (_event, serverUrl) => {
     const value = setServerUrl(serverUrl)
     saveAuthSession(null)

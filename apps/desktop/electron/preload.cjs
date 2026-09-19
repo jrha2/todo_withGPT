@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('auth:login', { loginId, password }),
     logout: () => ipcRenderer.invoke('auth:logout'),
     signup: (input) => ipcRenderer.invoke('auth:signup', input),
+    getServerMigrationNotice: () =>
+      ipcRenderer.invoke('auth:getServerMigrationNotice'),
   },
   me: {
     updateProfile: (input) => ipcRenderer.invoke('me:updateProfile', input),

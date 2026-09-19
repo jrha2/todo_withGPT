@@ -46,6 +46,9 @@ declare global {
         login: (loginId: string, password: string) => Promise<unknown>
         logout: () => Promise<unknown>
         signup: (input: unknown) => Promise<unknown>
+        getServerMigrationNotice: () => Promise<
+          { from: string; to: string } | null
+        >
       }
       me: {
         updateProfile: (input: { name: string; email: string }) => Promise<unknown>

@@ -62,6 +62,18 @@ export async function getAuthSession() {
   return window.api.auth.getSession() as Promise<AuthUser | null>
 }
 
+// One-time notice shown after the client is automatically switched from the old
+// server address to the new one. Returns null when no switch happened.
+export async function getServerMigrationNotice() {
+  if (!window.api?.auth?.getServerMigrationNotice) {
+    return null
+  }
+
+  return window.api.auth.getServerMigrationNotice() as Promise<
+    { from: string; to: string } | null
+  >
+}
+
 export async function login(loginId: string, password: string) {
   if (!window.api?.auth?.login) {
     throw new Error('AUTH_API_UNAVAILABLE')

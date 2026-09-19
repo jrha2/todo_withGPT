@@ -6851,3 +6851,33 @@ body.is-resizing-navigation * {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+
+/* ── Login: one-time server relocation notice ── */
+.login-migration-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid #cfe3d4;
+  border-radius: 11px;
+  background: #eef6ef;
+  color: #2f5d3a;
+}
+
+.login-migration-notice strong {
+  font-size: 13px;
+}
+
+.login-migration-notice span {
+  font-size: 12px;
+  color: #3d6b47;
+}
+
+.login-migration-notice small {
+  font-size: 11px;
+  color: #6b8571;
+  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+}
