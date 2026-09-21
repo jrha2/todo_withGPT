@@ -19,6 +19,15 @@ export type SignupInput = {
 
 export type PendingUser = AuthUser & { createdAt: string }
 
+export type AccessLog = {
+  id: string
+  userId: string | null
+  loginId: string
+  name: string
+  event: 'login' | 'logout'
+  createdAt: string
+}
+
 export type ManagedUserInput = {
   loginId: string
   name: string
@@ -177,6 +186,14 @@ export async function getManagedUsers() {
   }
 
   return window.api.admin.getUsers() as Promise<AuthUser[]>
+}
+
+export async function getAccessLogs() {
+  if (!window.api?.admin?.getAccessLogs) {
+    throw new Error('ADMIN_API_UNAVAILABLE')
+  }
+
+  return window.api.admin.getAccessLogs() as Promise<AccessLog[]>
 }
 
 export async function createManagedUser(input: ManagedUserInput) {

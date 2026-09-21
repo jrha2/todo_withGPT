@@ -6,8 +6,10 @@ import {
   getManagedUsers,
   getManagedUserReferences,
   getPendingUsers,
+  getAccessLogs,
   rejectPendingUser,
   updateManagedUser,
+  type AccessLog,
   type AuthUser,
   type ManagedUserInput,
   type ManagedUserReferences,
@@ -81,12 +83,34 @@ function getDeleteErrorMessage(error: unknown) {
   return `계정을 삭제하지 못했습니다. (${message})`
 }
 
+// Render a server timestamp (SQLite CURRENT_TIMESTAMP is UTC "YYYY-MM-DD
+// HH:MM:SS") in the user's local time for the access-log view.
+function formatAccessLogTime(value: string) {
+  if (!value) return ''
+  const iso = value.includes('T') ? value : value.replace(' ', 'T') + 'Z'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    date.getFullYear() +
+    '-' + pad(date.getMonth() + 1) +
+    '-' + pad(date.getDate()) +
+    ' ' + pad(date.getHours()) +
+    ':' + pad(date.getMinutes()) +
+    ':' + pad(date.getSeconds())
+  )
+}
+
 function AdminUserManager({
   currentUser,
   onClose,
   onCurrentUserUpdated,
   onUsersChanged,
 }: AdminUserManagerProps) {
+  const [view, setView] = useState<'users' | 'logs'>('users')
+  const [accessLogs, setAccessLogs] = useState<AccessLog[]>([])
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false)
+  const [logsErrorMessage, setLogsErrorMessage] = useState('')
   const [users, setUsers] = useState<AuthUser[]>([])
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [draft, setDraft] = useState<ManagedUserInput>(emptyDraft)
@@ -120,6 +144,24 @@ function AdminUserManager({
     } catch (error) {
       console.error('Failed to load pending users:', error)
     }
+  }
+
+  const loadAccessLogs = async () => {
+    setIsLoadingLogs(true)
+    setLogsErrorMessage('')
+    try {
+      setAccessLogs(await getAccessLogs())
+    } catch (error) {
+      console.error('Failed to load access logs:', error)
+      setLogsErrorMessage('접속 기록을 불러오지 못했습니다.')
+    } finally {
+      setIsLoadingLogs(false)
+    }
+  }
+
+  const showAccessLogs = () => {
+    setView('logs')
+    void loadAccessLogs()
   }
 
   useEffect(() => {
@@ -271,12 +313,87 @@ function AdminUserManager({
         <header className="admin-manager-header">
           <div>
             <span>ADMIN CONSOLE</span>
-            <h2>팀원 계정 관리</h2>
-            <p>로그인 ID와 담당자 정보를 등록하고 접근 권한을 관리합니다.</p>
+            <h2>{view === 'logs' ? '접속 기록' : '팀원 계정 관리'}</h2>
+            <p>
+              {view === 'logs'
+                ? '어떤 ID가 언제 로그인하거나 로그아웃했는지 확인합니다. (사용자별 최근 100건 보관)'
+                : '로그인 ID와 담당자 정보를 등록하고 접근 권한을 관리합니다.'}
+            </p>
           </div>
           <button type="button" onClick={onClose} aria-label="닫기">×</button>
         </header>
 
+        <div className="admin-manager-tabs" role="tablist" aria-label="관리 화면 전환">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'users'}
+            className={view === 'users' ? 'is-active' : ''}
+            onClick={() => setView('users')}
+          >
+            팀원 계정 관리
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'logs'}
+            className={view === 'logs' ? 'is-active' : ''}
+            onClick={showAccessLogs}
+          >
+            접속 기록
+          </button>
+        </div>
+
+        {view === 'logs' ? (
+          <div className="admin-access-logs">
+            <div className="admin-access-logs-toolbar">
+              <button
+                type="button"
+                onClick={() => void loadAccessLogs()}
+                disabled={isLoadingLogs}
+              >
+                {isLoadingLogs ? '불러오는 중...' : '새로고침'}
+              </button>
+            </div>
+            {logsErrorMessage && (
+              <div className="admin-form-error">{logsErrorMessage}</div>
+            )}
+            {isLoadingLogs ? (
+              <div className="admin-list-message">불러오는 중...</div>
+            ) : accessLogs.length === 0 ? (
+              <div className="admin-list-message">접속 기록이 없습니다.</div>
+            ) : (
+              <table className="admin-access-logs-table">
+                <thead>
+                  <tr>
+                    <th>구분</th>
+                    <th>로그인 ID</th>
+                    <th>이름</th>
+                    <th>시각</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accessLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td>
+                        <span
+                          className={
+                            'admin-access-event admin-access-event-' + log.event
+                          }
+                        >
+                          {log.event === 'login' ? '로그인' : '로그아웃'}
+                        </span>
+                      </td>
+                      <td>{log.loginId || '-'}</td>
+                      <td>{log.name || '-'}</td>
+                      <td>{formatAccessLogTime(log.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ) : (
         <div className="admin-manager-body">
           <aside className="admin-user-list">
             <button className="admin-add-user" type="button" onClick={startCreate}>
@@ -444,6 +561,7 @@ function AdminUserManager({
             </div>
           </form>
         </div>
+        )}
 
         {deleteTarget && (
           <div className="modal-backdrop admin-delete-backdrop">

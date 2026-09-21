@@ -238,6 +238,11 @@ export async function getPendingUsersFromServer(token) {
   return data.users
 }
 
+export async function getAccessLogsFromServer(token) {
+  const data = await request('/api/admin/access-logs', { token })
+  return data.logs
+}
+
 export async function approveUserOnServer(token, userId) {
   const data = await request(
     `/api/admin/users/${encodeURIComponent(userId)}/approve`,

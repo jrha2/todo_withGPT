@@ -479,6 +479,16 @@ export function initializeDb() {
       FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS access_logs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NULL,
+      login_id TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL DEFAULT '',
+      event TEXT NOT NULL CHECK (event IN ('login', 'logout')),
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_nav_nodes_parent_order
       ON nav_nodes(parent_id, order_index);
 
@@ -529,6 +539,12 @@ export function initializeDb() {
 
     CREATE INDEX IF NOT EXISTS idx_activity_logs_task
       ON activity_logs(task_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_access_logs_user_created
+      ON access_logs(user_id, created_at DESC, id);
+
+    CREATE INDEX IF NOT EXISTS idx_access_logs_created
+      ON access_logs(created_at DESC, id);
   `)
 
   const userColumns = db.prepare(`PRAGMA table_info(users)`).all()
@@ -916,6 +932,70 @@ export function authenticateUser(loginId, password) {
 export function getSessionUser(userId) {
   const user = getUserAccountRow(userId)
   return user?.isActive ? toPublicUser(user) : null
+}
+
+// Number of access-log rows kept per user; older rows for that user are pruned
+// on each new insert so the table cannot grow without bound.
+const ACCESS_LOG_KEEP_PER_USER = 100
+// Cap for how many recent rows the admin access-log view returns.
+const ACCESS_LOG_VIEW_LIMIT = 1000
+
+// Record a login/logout access event and prune old rows so at most
+// ACCESS_LOG_KEEP_PER_USER rows remain for that user. Best-effort: any failure
+// is swallowed by the caller so access logging never blocks auth.
+export function recordAccessLog({ userId, loginId, name, event }) {
+  const db = getDb()
+  const normalizedEvent = event === 'logout' ? 'logout' : 'login'
+  const record = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO access_logs (id, user_id, login_id, name, event)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      `access-${randomUUID()}`,
+      userId ?? null,
+      String(loginId ?? ''),
+      String(name ?? ''),
+      normalizedEvent,
+    )
+
+    if (userId) {
+      // Keep only the newest ACCESS_LOG_KEEP_PER_USER rows for this user.
+      db.prepare(`
+        DELETE FROM access_logs
+        WHERE user_id = ?
+          AND id NOT IN (
+            SELECT id FROM access_logs
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+          )
+      `).run(userId, userId, ACCESS_LOG_KEEP_PER_USER)
+    }
+  })
+  record()
+}
+
+// Recent access events (login/logout) for the admin access-log view, newest
+// first. Includes the current login_id/name from the users table when the
+// account still exists, falling back to the value stored at event time.
+export function getAccessLogs(limit = ACCESS_LOG_VIEW_LIMIT) {
+  const safeLimit = Math.min(
+    Math.max(1, Number(limit) || ACCESS_LOG_VIEW_LIMIT),
+    ACCESS_LOG_VIEW_LIMIT,
+  )
+  return getDb().prepare(`
+    SELECT
+      access_log.id AS id,
+      access_log.user_id AS userId,
+      COALESCE(user.login_id, access_log.login_id, '') AS loginId,
+      COALESCE(user.name, access_log.name, '') AS name,
+      access_log.event AS event,
+      access_log.created_at AS createdAt
+    FROM access_logs AS access_log
+    LEFT JOIN users AS user ON user.id = access_log.user_id
+    ORDER BY access_log.created_at DESC, access_log.id DESC
+    LIMIT ?
+  `).all(safeLimit)
 }
 
 export function getManagedUsers() {

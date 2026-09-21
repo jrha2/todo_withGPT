@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
     getPendingUsers: () => ipcRenderer.invoke('admin:getPendingUsers'),
     approveUser: (userId) => ipcRenderer.invoke('admin:approveUser', userId),
     rejectUser: (userId) => ipcRenderer.invoke('admin:rejectUser', userId),
+    getAccessLogs: () => ipcRenderer.invoke('admin:getAccessLogs'),
   },
   zoom: {
     min: ZOOM_MIN,

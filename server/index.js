@@ -25,6 +25,8 @@ import {
   approveUser,
   changeOwnPassword,
   createSignupRequest,
+  getAccessLogs,
+  recordAccessLog,
   getPendingUsers,
   rejectUser,
   updateOwnProfile,
@@ -71,7 +73,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.5.2'
+const serverVersion = '1.5.3'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -834,6 +836,16 @@ async function handleRequest(request, response) {
     const body = await readJson(request)
     const user = authenticateUser(body.loginId, body.password)
     const session = issueSession(user.id)
+    try {
+      recordAccessLog({
+        userId: user.id,
+        loginId: user.loginId,
+        name: user.name,
+        event: 'login',
+      })
+    } catch (error) {
+      console.error('[Access] Failed to record login:', error)
+    }
     sendJson(response, 200, { user, ...session })
     return
   }
@@ -855,6 +867,16 @@ async function handleRequest(request, response) {
   if (method === 'POST' && pathname === '/api/auth/logout') {
     const session = requireSession(request)
     getDb().prepare(`DELETE FROM auth_sessions WHERE id = ?`).run(session.sessionId)
+    try {
+      recordAccessLog({
+        userId: session.user.id,
+        loginId: session.user.loginId,
+        name: session.user.name,
+        event: 'logout',
+      })
+    } catch (error) {
+      console.error('[Access] Failed to record logout:', error)
+    }
     sendJson(response, 200, { success: true })
     return
   }
@@ -1377,6 +1399,14 @@ async function handleRequest(request, response) {
   if (method === 'GET' && pathname === '/api/admin/users/pending') {
     requireAdmin(request)
     sendJson(response, 200, { users: getPendingUsers() })
+    return
+  }
+
+  // Access logs (login/logout events) for the admin console. Fixed pathname,
+  // declared before the generic /api/admin/users/:id matchers.
+  if (method === 'GET' && pathname === '/api/admin/access-logs') {
+    requireAdmin(request)
+    sendJson(response, 200, { logs: getAccessLogs() })
     return
   }
 

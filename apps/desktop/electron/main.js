@@ -30,6 +30,7 @@ import {
   updateOwnProfileOnServer,
   changeOwnPasswordOnServer,
   getPendingUsersFromServer,
+  getAccessLogsFromServer,
   approveUserOnServer,
   rejectUserOnServer,
   deleteUserOnServer,
@@ -1254,6 +1255,10 @@ function registerIpcHandlers() {
   ipcMain.handle('admin:getPendingUsers', async () => {
     requireAdminUser()
     return getPendingUsersFromServer(currentAuthToken)
+  })
+  ipcMain.handle('admin:getAccessLogs', async () => {
+    requireAdminUser()
+    return getAccessLogsFromServer(currentAuthToken)
   })
   ipcMain.handle('admin:approveUser', async (_event, userId) => {
     requireAdminUser()

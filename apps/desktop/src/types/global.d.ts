@@ -66,6 +66,7 @@ declare global {
         getPendingUsers: () => Promise<unknown>
         approveUser: (userId: string) => Promise<unknown>
         rejectUser: (userId: string) => Promise<unknown>
+        getAccessLogs: () => Promise<unknown>
       }
       zoom: {
         min: number

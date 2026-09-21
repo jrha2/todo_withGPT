@@ -6881,3 +6881,97 @@ body.is-resizing-navigation * {
   word-break: break-all;
   font-variant-numeric: tabular-nums;
 }
+
+
+/* Admin console: tabs between user management and access logs (1.5.3) */
+.admin-manager-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 28px 12px;
+}
+
+.admin-manager-tabs button {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #6f7280;
+  background: #f1f1f5;
+  cursor: pointer;
+}
+
+.admin-manager-tabs button.is-active {
+  color: #ffffff;
+  background: #6d60d2;
+}
+
+.admin-access-logs {
+  min-height: 560px;
+  max-height: calc(92vh - 150px);
+  overflow: auto;
+  padding: 0 28px 24px;
+}
+
+.admin-access-logs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 0 12px;
+}
+
+.admin-access-logs-toolbar button {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #6d60d2;
+  cursor: pointer;
+}
+
+.admin-access-logs-toolbar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.admin-access-logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.admin-access-logs-table th,
+.admin-access-logs-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid #ececf2;
+  white-space: nowrap;
+}
+
+.admin-access-logs-table th {
+  position: sticky;
+  top: 0;
+  background: #f7f7fb;
+  color: #6f7280;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.admin-access-event {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-access-event-login {
+  color: #1f7a4d;
+  background: #e2f5ea;
+}
+
+.admin-access-event-logout {
+  color: #9a5b13;
+  background: #fbeede;
+}
