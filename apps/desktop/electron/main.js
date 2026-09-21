@@ -53,6 +53,7 @@ import {
   getServerSession,
   getSyncStateFromServer,
   getUpdatePolicyFromServer,
+  getAnnouncementFromServer,
   getServerUrl,
   getSubTasksFromServer,
   getTaskFromServer,
@@ -109,6 +110,8 @@ let reminderCheckTimer = null
 let dailyBriefingCheckTimer = null
 let dailyBriefingScheduleTimer = null
 let dailyBriefingTopmostTimer = null
+let announcementCheckTimer = null
+let announcementCheckRunning = false
 let isScreenLocked = false
 let saveBoundsTimer = null
 let currentUser = null
@@ -814,6 +817,90 @@ function markDailyBriefingShown(date) {
   }
 }
 
+// --- Announcement popup (server-managed via updates/announcement.json) --------
+// The server exposes the active announcement at GET /api/announcement. The
+// client shows a popup for it once per (device, announcement id); dismissing
+// "don't show again" records the id locally so it won't reappear until the
+// admin changes the id. State is per-user, mirroring the daily-briefing state.
+
+let latestAnnouncement = null
+
+function getAnnouncementStatePath() {
+  return path.join(app.getPath('userData'), 'announcement-state.json')
+}
+
+function readAnnouncementState() {
+  try {
+    return JSON.parse(readFileSync(getAnnouncementStatePath(), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function getSeenAnnouncementIds() {
+  const state = readAnnouncementState()
+  const userKey = currentUser?.id || 'anonymous'
+  const seen = state.seenIdsByUser?.[userKey]
+  return Array.isArray(seen) ? seen : []
+}
+
+function markAnnouncementSeen(announcementId) {
+  const id = String(announcementId ?? '').trim()
+  if (!id) return
+  try {
+    const currentState = readAnnouncementState()
+    const userKey = currentUser?.id || 'anonymous'
+    const previous = Array.isArray(currentState.seenIdsByUser?.[userKey])
+      ? currentState.seenIdsByUser[userKey]
+      : []
+    if (previous.includes(id)) return
+    // Keep only the newest 20 ids per user so the file cannot grow unbounded.
+    const nextSeen = [...previous, id].slice(-20)
+    writeFileSync(
+      getAnnouncementStatePath(),
+      JSON.stringify({
+        ...currentState,
+        seenIdsByUser: {
+          ...(currentState.seenIdsByUser || {}),
+          [userKey]: nextSeen,
+        },
+      }, null, 2),
+      'utf8',
+    )
+  } catch (error) {
+    console.error('[Announcement] Failed to save seen state:', error)
+  }
+}
+
+// Return the active announcement when it should be shown (active, has an id,
+// and not yet dismissed on this device by this user); otherwise null.
+function pickUnseenAnnouncement(announcement) {
+  if (!announcement || announcement.active !== true) return null
+  const id = String(announcement.id ?? '').trim()
+  if (!id) return null
+  if (getSeenAnnouncementIds().includes(id)) return null
+  return { id, title: announcement.title ?? '', body: announcement.body ?? '' }
+}
+
+// Poll the server for the current announcement and, if it is active and unseen,
+// push it to the renderer so it pops up even while the app is running.
+async function checkAnnouncement() {
+  if (announcementCheckRunning || !currentUser) return
+  announcementCheckRunning = true
+  try {
+    const announcement = await getAnnouncementFromServer()
+    const unseen = pickUnseenAnnouncement(announcement)
+    latestAnnouncement = unseen
+    if (unseen && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('announcement:new', unseen)
+    }
+  } catch (error) {
+    console.error('[Announcement] Check failed:', error)
+  } finally {
+    announcementCheckRunning = false
+  }
+}
+
 function isKoreanBusinessDay(date) {
   const day = date.getDay()
   if (day === 0 || day === 6) return false
@@ -1107,6 +1194,27 @@ function registerIpcHandlers() {
     return { serverUrl: value }
   })
   ipcMain.handle('auth:getSession', () => currentUser)
+  // Announcement popup: renderer asks for the current active+unseen
+  // announcement (on mount) and reports when the user dismisses one.
+  ipcMain.handle('announcement:getActive', async () => {
+    if (!currentUser) return null
+    try {
+      const announcement = await getAnnouncementFromServer()
+      const unseen = pickUnseenAnnouncement(announcement)
+      latestAnnouncement = unseen
+      return unseen
+    } catch (error) {
+      console.error('[Announcement] getActive failed:', error)
+      return null
+    }
+  })
+  ipcMain.handle('announcement:markSeen', (_event, announcementId) => {
+    markAnnouncementSeen(announcementId)
+    if (latestAnnouncement && latestAnnouncement.id === announcementId) {
+      latestAnnouncement = null
+    }
+    return { success: true }
+  })
   ipcMain.handle('auth:login', async (_event, payload) => {
     try {
       const result = await loginToServer(payload.loginId, payload.password)
@@ -1114,6 +1222,7 @@ function registerIpcHandlers() {
       startSyncEvents()
       setTimeout(checkDueReminders, 200)
       setTimeout(checkDailyBriefing, 400)
+      setTimeout(checkAnnouncement, 600)
       return { success: true, user: result.user }
     } catch (error) {
       const code = error instanceof Error ? error.message : String(error)
@@ -1661,9 +1770,11 @@ app.whenReady().then(async () => {
   powerMonitor.on('resume', handleSystemResume)
   reminderCheckTimer = setInterval(checkDueReminders, 30 * 1000)
   dailyBriefingCheckTimer = setInterval(checkDailyBriefing, 60 * 1000)
+  announcementCheckTimer = setInterval(checkAnnouncement, 5 * 60 * 1000)
   scheduleNextDailyBriefingCheck()
   setTimeout(checkDueReminders, 1500)
   setTimeout(checkDailyBriefing, 1800)
+  setTimeout(checkAnnouncement, 2500)
   startSyncEvents()
 
   app.on('activate', () => showMainWindow())
@@ -1673,6 +1784,7 @@ app.on('before-quit', () => {
   isQuitting = true
   clearInterval(reminderCheckTimer)
   clearInterval(dailyBriefingCheckTimer)
+  clearInterval(announcementCheckTimer)
   clearTimeout(dailyBriefingScheduleTimer)
   clearTimeout(dailyBriefingTopmostTimer)
   clearTimeout(saveBoundsTimer)

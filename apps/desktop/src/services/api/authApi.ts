@@ -83,6 +83,40 @@ export async function getServerMigrationNotice() {
   >
 }
 
+export type Announcement = {
+  id: string
+  title: string
+  body: string
+}
+
+// Current active + not-yet-dismissed announcement, or null.
+export async function getActiveAnnouncement() {
+  if (!window.api?.announcement?.getActive) {
+    return null
+  }
+
+  return window.api.announcement.getActive() as Promise<Announcement | null>
+}
+
+// Record that the user dismissed an announcement with "don't show again".
+export async function markAnnouncementSeen(id: string) {
+  if (!window.api?.announcement?.markSeen) {
+    return
+  }
+
+  await window.api.announcement.markSeen(id)
+}
+
+// Subscribe to announcements pushed while the app is running. Returns an
+// unsubscribe function (no-op when the bridge is unavailable).
+export function onNewAnnouncement(callback: (announcement: Announcement) => void) {
+  if (!window.api?.announcement?.onNew) {
+    return () => {}
+  }
+
+  return window.api.announcement.onNew(callback)
+}
+
 export async function login(loginId: string, password: string) {
   if (!window.api?.auth?.login) {
     throw new Error('AUTH_API_UNAVAILABLE')

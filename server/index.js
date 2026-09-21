@@ -73,7 +73,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.5.3'
+const serverVersion = '1.6.0'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -450,6 +450,31 @@ async function readUpdatePolicy() {
   }
 }
 
+// Reads the server-managed announcement from updates/announcement.json.
+// Shape: { id, title, body, active }. The client shows a popup with `title` /
+// `body` when `active` is true and the `id` has not been dismissed on that
+// device yet. Changing `id` makes a previously-dismissed announcement show
+// again. Editable on the server without a restart; missing/invalid -> inactive.
+async function readAnnouncement() {
+  const defaults = { id: '', title: '', body: '', active: false }
+  try {
+    const raw = await readFile(
+      path.join(updatesDirectory, 'announcement.json'),
+      'utf8',
+    )
+    const parsed = JSON.parse(raw)
+    return {
+      id: typeof parsed.id === 'string' ? parsed.id : '',
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+      body: typeof parsed.body === 'string' ? parsed.body : '',
+      active: parsed.active === true,
+    }
+  } catch {
+    // No announcement file (or invalid) -> inactive (no popup).
+    return defaults
+  }
+}
+
 async function broadcastPublishedUpdate(metadataFileName) {
   try {
     const metadata = await readFile(
@@ -774,6 +799,15 @@ async function handleRequest(request, response) {
   // (editable on the server without a restart); missing/invalid file -> defaults.
   if (method === 'GET' && pathname === '/api/update-policy') {
     sendJson(response, 200, { policy: await readUpdatePolicy() })
+    return
+  }
+
+  // Server-managed announcement popup text. Unauthenticated so the client can
+  // read it around login time and while running. Values come from
+  // updates/announcement.json (editable on the server without a restart);
+  // missing/invalid file -> inactive (no popup).
+  if (method === 'GET' && pathname === '/api/announcement') {
+    sendJson(response, 200, { announcement: await readAnnouncement() })
     return
   }
 

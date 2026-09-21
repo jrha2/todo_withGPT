@@ -755,7 +755,7 @@ function NavigationBar({
           <div className="navigation-brand-mark">✓</div>
           <div>
             <div className="navigation-title">투자기획팀</div>
-            <div className="navigation-subtitle">업무관리 공간 · Version 1.5.3</div>
+            <div className="navigation-subtitle">업무관리 공간 · Version 1.6.0</div>
           </div>
         </div>
         <div className="navigation-header-actions">

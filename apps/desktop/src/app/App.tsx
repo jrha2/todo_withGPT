@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AdminUserManager from '../features/admin/components/AdminUserManager'
 import MyAccountModal from '../features/account/components/MyAccountModal'
+import AnnouncementModal from '../features/announcement/components/AnnouncementModal'
 import LoginScreen from '../features/auth/components/LoginScreen'
 import TaskDetailPage from '../pages/TaskDetailPage'
-import { getAuthSession, logout, type AuthUser } from '../services/api/authApi'
+import {
+  getActiveAnnouncement,
+  getAuthSession,
+  logout,
+  onNewAnnouncement,
+  type Announcement,
+  type AuthUser,
+} from '../services/api/authApi'
 import {
   confirmDiscardDirtyDrafts,
   hasDirtyDrafts,
@@ -17,6 +25,7 @@ function App() {
   const [isSessionLoading, setIsSessionLoading] = useState(true)
   const [isAdminOpen, setIsAdminOpen] = useState(false)
   const [isAccountOpen, setIsAccountOpen] = useState(false)
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null)
   const [userRevision, setUserRevision] = useState(0)
   const [remoteRefreshRevision, setRemoteRefreshRevision] = useState<number | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
@@ -101,6 +110,22 @@ function App() {
       unsubscribeStatus()
     }
   }, [startPendingRefresh])
+
+  // Announcement popup: while logged in, subscribe to announcements pushed by
+  // the periodic poll and also fetch the current active/unseen one once. The
+  // main process only surfaces an announcement that is active and not yet
+  // dismissed on this device, so setting it here is enough to pop it up.
+  useEffect(() => {
+    if (!currentUser) return
+    const unsubscribe = onNewAnnouncement(setAnnouncement)
+    getActiveAnnouncement()
+      .then((active) => { if (active) setAnnouncement(active) })
+      .catch((error) => console.error('Failed to load announcement:', error))
+    return () => {
+      unsubscribe()
+      setAnnouncement(null)
+    }
+  }, [currentUser])
 
   const handleRemoteRefreshComplete = useCallback(async (revision: number, succeeded: boolean) => {
     if (revision !== remoteRefreshRevision) return
@@ -190,6 +215,12 @@ function App() {
           currentUser={currentUser}
           onClose={() => setIsAccountOpen(false)}
           onProfileUpdated={setCurrentUser}
+        />
+      )}
+      {announcement && (
+        <AnnouncementModal
+          announcement={announcement}
+          onClose={() => setAnnouncement(null)}
         />
       )}
     </>

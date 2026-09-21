@@ -114,6 +114,18 @@ export async function getUpdatePolicyFromServer() {
   }
 }
 
+// Server-managed announcement popup ({ id, title, body, active }).
+// Best-effort: returns null on any failure so the popup simply doesn't show.
+export async function getAnnouncementFromServer() {
+  try {
+    const data = await request('/api/announcement', {})
+    return data.announcement ?? null
+  } catch (error) {
+    console.error('[Announcement] Failed to load announcement:', error)
+    return null
+  }
+}
+
 export async function streamSyncEventsFromServer(
   token,
   clientId,

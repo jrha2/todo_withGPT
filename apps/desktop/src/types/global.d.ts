@@ -57,6 +57,19 @@ declare global {
           newPassword: string,
         ) => Promise<unknown>
       }
+      announcement: {
+        getActive: () => Promise<
+          { id: string; title: string; body: string } | null
+        >
+        markSeen: (id: string) => Promise<unknown>
+        onNew: (
+          callback: (announcement: {
+            id: string
+            title: string
+            body: string
+          }) => void,
+        ) => () => void
+      }
       admin: {
         getUsers: () => Promise<unknown>
         createUser: (input: unknown) => Promise<unknown>

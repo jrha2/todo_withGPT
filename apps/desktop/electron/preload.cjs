@@ -27,6 +27,15 @@ contextBridge.exposeInMainWorld('api', {
     changePassword: (currentPassword, newPassword) =>
       ipcRenderer.invoke('me:changePassword', { currentPassword, newPassword }),
   },
+  announcement: {
+    getActive: () => ipcRenderer.invoke('announcement:getActive'),
+    markSeen: (id) => ipcRenderer.invoke('announcement:markSeen', id),
+    onNew: (callback) => {
+      const listener = (_event, announcement) => callback(announcement)
+      ipcRenderer.on('announcement:new', listener)
+      return () => ipcRenderer.removeListener('announcement:new', listener)
+    },
+  },
   admin: {
     getUsers: () => ipcRenderer.invoke('admin:getUsers'),
     createUser: (input) => ipcRenderer.invoke('admin:createUser', input),
