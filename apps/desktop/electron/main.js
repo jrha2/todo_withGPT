@@ -120,7 +120,11 @@ let syncAbortController = null
 // re-logs in against the new server. Env override (TODO_SERVER_URL) is respected
 // and takes precedence, so this only affects clients that stored an old address.
 const SERVER_MIGRATION = {
-  from: ['http://130.1.14.61:4310', 'http://127.0.0.1:4310'],
+  from: [
+    'http://130.1.14.61:4310',
+    'http://100.65.76.14:4310',
+    'http://127.0.0.1:4310',
+  ],
   to: 'https://home-desktop.tailf5d646.ts.net:10000',
 }
 let serverMigrationNotice = null

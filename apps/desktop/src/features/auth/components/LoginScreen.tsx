@@ -128,7 +128,7 @@ function LoginScreen({ onLogin }: LoginScreenProps) {
       <section className="login-card">
         <div className="login-brand-mark">✓</div>
         <div className="login-heading">
-          <span>투자기획팀 업무관리 공간 · VERSION 1.5.1</span>
+          <span>투자기획팀 업무관리 공간 · VERSION 1.5.2</span>
           <h1>{mode === 'login' ? '다시 만나서 반가워요' : '계정 가입 신청'}</h1>
           <p>
             {mode === 'login'

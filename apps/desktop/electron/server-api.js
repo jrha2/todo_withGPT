@@ -1,6 +1,17 @@
+import { net } from 'electron'
+
 const DEFAULT_SERVER_URL = 'http://127.0.0.1:4310'
 const REQUEST_TIMEOUT_MS = 8000
 const FILE_REQUEST_TIMEOUT_MS = 60_000
+
+// All server requests go through Electron's net.fetch (Chromium networking)
+// instead of Node/undici global fetch. Chromium uses the OS trust store and the
+// system/corporate proxy, so HTTPS servers behind a corporate TLS-inspecting
+// proxy (or reached via a system proxy) work in the packaged app the same way
+// they do in a browser. Node's fetch ignores the Windows certificate store and
+// system proxy, which broke connecting to the new Tailscale HTTPS server on
+// managed PCs while the old plain-HTTP LAN server kept working.
+const httpFetch = (url, options) => net.fetch(url, options)
 let configuredServerUrl = String(
   process.env.TODO_SERVER_URL || DEFAULT_SERVER_URL,
 ).replace(/\/$/, '')
@@ -51,7 +62,7 @@ async function request(pathname, options = {}) {
 
   let response
   try {
-    response = await fetch(getServerUrl() + pathname, {
+    response = await httpFetch(getServerUrl() + pathname, {
       method: options.method || 'GET',
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -109,7 +120,7 @@ export async function streamSyncEventsFromServer(
   signal,
   onEvent,
 ) {
-  const response = await fetch(getServerUrl() + '/api/sync/events', {
+  const response = await httpFetch(getServerUrl() + '/api/sync/events', {
     headers: {
       Accept: 'text/event-stream',
       Authorization: `Bearer ${token}`,
@@ -609,7 +620,7 @@ export async function deleteCommentOnServer(token, commentId) {
 export async function uploadAttachmentToServer(token, taskId, file) {
   let response
   try {
-    response = await fetch(
+    response = await httpFetch(
       `${getServerUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`,
       {
         method: 'POST',
@@ -661,7 +672,7 @@ export async function uploadAttachmentToServer(token, taskId, file) {
 export async function downloadAttachmentFromServer(token, attachmentId) {
   let response
   try {
-    response = await fetch(
+    response = await httpFetch(
       `${getServerUrl()}/api/attachments/${encodeURIComponent(attachmentId)}/content`,
       {
         headers: { Authorization: `Bearer ${token}` },
