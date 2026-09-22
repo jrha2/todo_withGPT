@@ -489,6 +489,17 @@ export function initializeDb() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS announcement_dismissals (
+      announcement_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (announcement_id, user_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_announcement_dismissals_ann
+      ON announcement_dismissals(announcement_id);
+
     CREATE INDEX IF NOT EXISTS idx_nav_nodes_parent_order
       ON nav_nodes(parent_id, order_index);
 
@@ -996,6 +1007,35 @@ export function getAccessLogs(limit = ACCESS_LOG_VIEW_LIMIT) {
     ORDER BY access_log.created_at DESC, access_log.id DESC
     LIMIT ?
   `).all(safeLimit)
+}
+
+// ---- Announcement dismissals (1.6.1) ----
+
+// Record that a user dismissed an announcement ("다시 보지 않기").
+// Upserts (INSERT OR IGNORE) so the same (announcement_id, user_id) pair is
+// stored at most once.
+export function recordAnnouncementDismissal(announcementId, userId) {
+  getDb().prepare(`
+    INSERT OR IGNORE INTO announcement_dismissals (announcement_id, user_id)
+    VALUES (?, ?)
+  `).run(String(announcementId), String(userId))
+}
+
+// Check whether every active user (status='active', login_id not null) has
+// dismissed the given announcement.  Returns { dismissed: number, total: number,
+// allDismissed: boolean }.
+export function getAnnouncementDismissalStatus(announcementId) {
+  const db = getDb()
+  const total = db.prepare(`
+    SELECT COUNT(*) AS count FROM users
+    WHERE status = 'active' AND login_id IS NOT NULL
+  `).get().count
+  const dismissed = db.prepare(`
+    SELECT COUNT(*) AS count FROM announcement_dismissals AS d
+    INNER JOIN users AS u ON u.id = d.user_id
+    WHERE d.announcement_id = ? AND u.status = 'active' AND u.login_id IS NOT NULL
+  `).get(String(announcementId)).count
+  return { dismissed, total, allDismissed: total > 0 && dismissed >= total }
 }
 
 export function getManagedUsers() {
