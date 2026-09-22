@@ -542,6 +542,7 @@ function isSynchronizedMutation(method, pathname) {
   if (!['POST', 'PUT', 'DELETE'].includes(method)) return false
   if (!pathname.startsWith('/api/')) return false
   if (pathname.startsWith('/api/auth/')) return false
+  if (pathname === '/api/announcement/dismiss') return false
   if (/^\/api\/reminders\/[^/]+\/(snooze|dismiss)$/.test(pathname)) {
     return false
   }
