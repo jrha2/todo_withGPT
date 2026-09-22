@@ -126,6 +126,16 @@ export async function getAnnouncementFromServer() {
   }
 }
 
+// 1.6.1: report a "다시 보지 않기" dismissal to the server so it can auto-retire
+// the announcement once every active user has dismissed it. Best-effort.
+export async function dismissAnnouncementOnServer(id) {
+  try {
+    await request('/api/announcement/dismiss', { method: 'POST', body: { id } })
+  } catch (error) {
+    console.error('[Announcement] Failed to report dismissal:', error)
+  }
+}
+
 export async function streamSyncEventsFromServer(
   token,
   clientId,

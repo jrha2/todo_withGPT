@@ -54,6 +54,7 @@ import {
   getSyncStateFromServer,
   getUpdatePolicyFromServer,
   getAnnouncementFromServer,
+  dismissAnnouncementOnServer,
   getServerUrl,
   getSubTasksFromServer,
   getTaskFromServer,
@@ -1208,11 +1209,14 @@ function registerIpcHandlers() {
       return null
     }
   })
-  ipcMain.handle('announcement:markSeen', (_event, announcementId) => {
+  ipcMain.handle('announcement:markSeen', async (_event, announcementId) => {
     markAnnouncementSeen(announcementId)
     if (latestAnnouncement && latestAnnouncement.id === announcementId) {
       latestAnnouncement = null
     }
+    // 1.6.1: also report to the server so it can auto-retire the announcement
+    // once every active user has dismissed it (best-effort, non-blocking).
+    await dismissAnnouncementOnServer(announcementId)
     return { success: true }
   })
   ipcMain.handle('auth:login', async (_event, payload) => {

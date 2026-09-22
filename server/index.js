@@ -27,6 +27,8 @@ import {
   createSignupRequest,
   getAccessLogs,
   recordAccessLog,
+  recordAnnouncementDismissal,
+  getAnnouncementDismissalStatus,
   getPendingUsers,
   rejectUser,
   updateOwnProfile,
@@ -73,7 +75,7 @@ import {
 const host = process.env.TODO_SERVER_HOST || '0.0.0.0'
 const port = Number(process.env.TODO_SERVER_PORT || 4310)
 const sessionDays = Math.max(1, Number(process.env.TODO_SESSION_DAYS || 30))
-const serverVersion = '1.6.0'
+const serverVersion = '1.6.1'
 const syncClients = new Set()
 let updateDirectoryWatcher = null
 let updateBroadcastTimer = null
@@ -463,12 +465,25 @@ async function readAnnouncement() {
       'utf8',
     )
     const parsed = JSON.parse(raw)
-    return {
+    const announcement = {
       id: typeof parsed.id === 'string' ? parsed.id : '',
       title: typeof parsed.title === 'string' ? parsed.title : '',
       body: typeof parsed.body === 'string' ? parsed.body : '',
       active: parsed.active === true,
     }
+    // 1.6.1: auto-retire an announcement once every active user has dismissed it
+    // ("다시 보지 않기"). Dismissals are recorded server-side via
+    // POST /api/announcement/dismiss; when all active accounts have dismissed
+    // this id, stop serving it as active (no popup for anyone).
+    if (announcement.active && announcement.id) {
+      try {
+        const status = getAnnouncementDismissalStatus(announcement.id)
+        if (status.allDismissed) announcement.active = false
+      } catch (error) {
+        console.error('[Announcement] Dismissal status check failed:', error)
+      }
+    }
+    return announcement
   } catch {
     // No announcement file (or invalid) -> inactive (no popup).
     return defaults
@@ -808,6 +823,18 @@ async function handleRequest(request, response) {
   // missing/invalid file -> inactive (no popup).
   if (method === 'GET' && pathname === '/api/announcement') {
     sendJson(response, 200, { announcement: await readAnnouncement() })
+    return
+  }
+
+  // 1.6.1: record a per-user "다시 보지 않기" dismissal on the server so the
+  // server can auto-retire an announcement once every active user has dismissed
+  // it. Authenticated; body { id }.
+  if (method === 'POST' && pathname === '/api/announcement/dismiss') {
+    const session = requireSession(request)
+    const body = await readJson(request)
+    const id = String(body?.id ?? '').trim()
+    if (id) recordAnnouncementDismissal(id, session.user.id)
+    sendJson(response, 200, { ok: true })
     return
   }
 
